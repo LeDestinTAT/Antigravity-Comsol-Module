@@ -1,0 +1,48 @@
+{
+  "className": "OpticalWaveguideModel",
+  "parameters": {
+    "L_wg": "20[um]",
+    "W_wg": "2[um]",
+    "H_wg": "1[um]"
+  },
+  "geometry": {
+    "dimension": 3,
+    "features": [
+      {
+        "tag": "blk_wg",
+        "type": "Block",
+        "size": ["L_wg", "W_wg", "H_wg"],
+        "pos": ["0[um]", "0[um]", "0[um]"]
+      }
+    ],
+    "selections": [
+      { "tag": "sel_port_in", "type": "FaceBox", "feature": "blk_wg", "face": "xmin", "entitydim": 2 },
+      { "tag": "sel_port_out", "type": "FaceBox", "feature": "blk_wg", "face": "xmax", "entitydim": 2 },
+      { "tag": "sel_sides", "type": "FaceBox", "feature": "blk_wg", "face": "ymin", "entitydim": 2 }
+    ]
+  },
+  "materials": [
+    {
+      "tag": "mat_silicon",
+      "label": "Silicon Core",
+      "selection": "all",
+      "properties": {
+        "relpermittivity": "11.68",
+        "relpermeability": "1"
+      }
+    }
+  ],
+  "physics": [
+    {
+      "tag": "ewfd",
+      "type": "ElectromagneticWavesFrequencyDomain",
+      "initialValues": { "E": ["0", "0", "0"] },
+      "features": [
+        { "tag": "sbc1", "type": "ScatteringBoundaryCondition", "selection": "sel_port_in", "props": { "WaveType": "PlaneWave" } },
+        { "tag": "pec1", "type": "PerfectElectricConductor", "selection": "sel_sides", "props": {} },
+        { "tag": "sbc2", "type": "ScatteringBoundaryCondition", "selection": "sel_port_out", "props": { "WaveType": "PlaneWave" } }
+      ]
+    }
+  ],
+  "study": { "type": "Stationary" }
+}

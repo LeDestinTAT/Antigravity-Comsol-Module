@@ -1,8 +1,18 @@
 {
   "name": "antigravity-comsol-module",
-  "version": "0.4.0-alpha",
-  "private": true,
-  "description": "Add-on module for COMSOL 6.2 automation (Precision 3D Geometry Engine, Physics Understanding & Tuning Engine, Java API model generation, Python MPh bridge, batch solver, and Dual-Agent closed-loop auto-fix).",
+  "version": "1.0.0",
+  "private": false,
+  "license": "MIT",
+  "description": "COMSOL Multiphysics 6.2 Automation Module: Precision 3D Geometry Engine, Multiphysics Understanding & Tuning Engine, Java API model generation, Python MPh bridge, batch solver, and standalone / dual-agent closed-loop auto-fix.",
+  "homepage": "https://github.com/LeDestinTAT/Antigravity-Comsol-Module#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LeDestinTAT/Antigravity-Comsol-Module.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LeDestinTAT/Antigravity-Comsol-Module/issues"
+  },
+  "author": "LeDestinTAT (https://github.com/LeDestinTAT)",
   "main": "global/comsol.cjs",
   "bin": {
     "comsol-agent": "deploy-comsol.cjs"

@@ -120,6 +120,19 @@ function installComsolModule(options = {}) {
     throw new Error(skillCheck.error);
   }
 
+  // Copy references, examples, and scripts alongside SKILL.md for standalone portability
+  const skillDir = path.dirname(skillPath);
+  const templateDir = path.join(MODULE_ROOT, "templates", "comsol-automation");
+  for (const sub of ["references", "examples", "scripts"]) {
+    const srcSub = path.join(templateDir, sub);
+    const destSub = path.join(skillDir, sub);
+    if (fs.existsSync(srcSub)) {
+      try {
+        fs.cpSync(srcSub, destSub, { recursive: true });
+      } catch (_) {}
+    }
+  }
+
   const envCheck = COMSOL_RUNTIME.detectComsolEnvironment({
     homeDir,
     comsolRoot: options.comsolRoot

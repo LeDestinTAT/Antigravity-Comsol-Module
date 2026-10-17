@@ -204,6 +204,195 @@ public class SolidMechanicsModel {
 `
   },
 
+  "acoustics": {
+    language: "java",
+    description: "COMSOL 6.2 3D Pressure Acoustics in an Air Cavity with SoundHardWall and NormalAcceleration",
+    physics: ["PressureAcoustics"],
+    code: `import com.comsol.model.*;
+import com.comsol.model.util.*;
+
+public class AcousticsModel {
+  public static Model run() {
+    Model model = ModelUtil.create("Model");
+    model.param().set("L", "100[mm]", "Cavity length");
+    model.param().set("W", "50[mm]", "Cavity width");
+    model.param().set("H", "50[mm]", "Cavity height");
+    model.param().set("a_in", "1[m/s^2]", "Inlet normal acceleration");
+
+    model.component().create("comp1", true);
+    GeomSequence geom = model.component("comp1").geom().create("geom1", 3);
+    geom.create("blk1", "Block");
+    geom.feature("blk1").set("size", new String[]{"L", "W", "H"});
+    geom.feature("blk1").set("selresult", true);
+    geom.run("fin");
+
+    model.component("comp1").selection().create("sel_driver", "Box");
+    model.component("comp1").selection("sel_driver").set("entitydim", 2);
+    model.component("comp1").selection("sel_driver").set("condition", "allvertices");
+    model.component("comp1").selection("sel_driver").set("xmin", "-1e-6[m]");
+    model.component("comp1").selection("sel_driver").set("xmax", "1e-6[m]");
+
+    model.component("comp1").selection().create("sel_wall", "Box");
+    model.component("comp1").selection("sel_wall").set("entitydim", 2);
+    model.component("comp1").selection("sel_wall").set("condition", "allvertices");
+    model.component("comp1").selection("sel_wall").set("xmin", "L-1e-6[m]");
+    model.component("comp1").selection("sel_wall").set("xmax", "L+1e-6[m]");
+
+    model.component("comp1").material().create("mat1", "Common");
+    model.component("comp1").material("mat1").propertyGroup("def").set("density", "1.204[kg/m^3]");
+    model.component("comp1").material("mat1").propertyGroup("def").set("soundspeed", "343.2[m/s]");
+
+    model.component("comp1").physics().create("acpr", "PressureAcoustics", "geom1");
+    model.component("comp1").physics("acpr").create("acc1", "NormalAcceleration", 2);
+    model.component("comp1").physics("acpr").feature("acc1").selection().named("sel_driver");
+    model.component("comp1").physics("acpr").feature("acc1").set("an0", "a_in");
+
+    model.component("comp1").physics("acpr").create("wall1", "SoundHardWall", 2);
+    model.component("comp1").physics("acpr").feature("wall1").selection().named("sel_wall");
+
+    model.component("comp1").mesh().create("mesh1");
+    model.component("comp1").mesh("mesh1").autoMeshSize(4);
+    model.component("comp1").mesh("mesh1").run();
+
+    model.study().create("std1");
+    model.study("std1").create("stat", "Stationary");
+    model.study("std1").run();
+    return model;
+  }
+
+  public static void main(String[] args) {
+    run();
+  }
+}
+`
+  },
+
+  "wave-optics": {
+    language: "java",
+    description: "COMSOL 6.2 3D Electromagnetic Waves Frequency Domain / Wave Optics with PEC and Scattering Boundary Conditions",
+    physics: ["ElectromagneticWavesFrequencyDomain"],
+    code: `import com.comsol.model.*;
+import com.comsol.model.util.*;
+
+public class WaveOpticsModel {
+  public static Model run() {
+    Model model = ModelUtil.create("Model");
+    model.param().set("L", "20[um]", "Waveguide length");
+    model.param().set("W", "2[um]", "Waveguide width");
+    model.param().set("H", "1[um]", "Waveguide height");
+
+    model.component().create("comp1", true);
+    GeomSequence geom = model.component("comp1").geom().create("geom1", 3);
+    geom.create("blk1", "Block");
+    geom.feature("blk1").set("size", new String[]{"L", "W", "H"});
+    geom.feature("blk1").set("selresult", true);
+    geom.run("fin");
+
+    model.component("comp1").selection().create("sel_inlet", "Box");
+    model.component("comp1").selection("sel_inlet").set("entitydim", 2);
+    model.component("comp1").selection("sel_inlet").set("condition", "allvertices");
+    model.component("comp1").selection("sel_inlet").set("xmin", "-1e-9[m]");
+    model.component("comp1").selection("sel_inlet").set("xmax", "1e-9[m]");
+
+    model.component("comp1").selection().create("sel_outlet", "Box");
+    model.component("comp1").selection("sel_outlet").set("entitydim", 2);
+    model.component("comp1").selection("sel_outlet").set("condition", "allvertices");
+    model.component("comp1").selection("sel_outlet").set("xmin", "L-1e-9[m]");
+    model.component("comp1").selection("sel_outlet").set("xmax", "L+1e-9[m]");
+
+    model.component("comp1").material().create("mat1", "Common");
+    model.component("comp1").material("mat1").propertyGroup("def").set("relpermittivity", "11.68");
+    model.component("comp1").material("mat1").propertyGroup("def").set("relpermeability", "1");
+
+    model.component("comp1").physics().create("ewfd", "ElectromagneticWavesFrequencyDomain", "geom1");
+    model.component("comp1").physics("ewfd").create("sbc1", "ScatteringBoundaryCondition", 2);
+    model.component("comp1").physics("ewfd").feature("sbc1").selection().named("sel_inlet");
+    model.component("comp1").physics("ewfd").feature("sbc1").set("WaveType", "PlaneWave");
+
+    model.component("comp1").physics("ewfd").create("sbc2", "ScatteringBoundaryCondition", 2);
+    model.component("comp1").physics("ewfd").feature("sbc2").selection().named("sel_outlet");
+    model.component("comp1").physics("ewfd").feature("sbc2").set("WaveType", "PlaneWave");
+
+    model.component("comp1").mesh().create("mesh1");
+    model.component("comp1").mesh("mesh1").autoMeshSize(3);
+    model.component("comp1").mesh("mesh1").run();
+
+    model.study().create("std1");
+    model.study("std1").create("stat", "Stationary");
+    model.study("std1").run();
+    return model;
+  }
+
+  public static void main(String[] args) {
+    run();
+  }
+}
+`
+  },
+
+  "magnetic-fields": {
+    language: "java",
+    description: "COMSOL 6.2 3D Magnetic Fields with Magnetic Insulation and Surface Current Excitation",
+    physics: ["MagneticFields"],
+    code: `import com.comsol.model.*;
+import com.comsol.model.util.*;
+
+public class MagneticFieldsModel {
+  public static Model run() {
+    Model model = ModelUtil.create("Model");
+    model.param().set("L", "30[mm]", "Core length");
+    model.param().set("W", "10[mm]", "Core width");
+    model.param().set("H", "10[mm]", "Core height");
+    model.param().set("Js0", "5000[A/m]", "Drive surface current");
+
+    model.component().create("comp1", true);
+    GeomSequence geom = model.component("comp1").geom().create("geom1", 3);
+    geom.create("blk1", "Block");
+    geom.feature("blk1").set("size", new String[]{"L", "W", "H"});
+    geom.feature("blk1").set("selresult", true);
+    geom.run("fin");
+
+    model.component("comp1").selection().create("sel_ins", "Box");
+    model.component("comp1").selection("sel_ins").set("entitydim", 2);
+    model.component("comp1").selection("sel_ins").set("condition", "allvertices");
+    model.component("comp1").selection("sel_ins").set("xmin", "-1e-6[m]");
+    model.component("comp1").selection("sel_ins").set("xmax", "1e-6[m]");
+
+    model.component("comp1").selection().create("sel_coil", "Box");
+    model.component("comp1").selection("sel_coil").set("entitydim", 2);
+    model.component("comp1").selection("sel_coil").set("condition", "allvertices");
+    model.component("comp1").selection("sel_coil").set("zmin", "H-1e-6[m]");
+    model.component("comp1").selection("sel_coil").set("zmax", "H+1e-6[m]");
+
+    model.component("comp1").material().create("mat1", "Common");
+    model.component("comp1").material("mat1").propertyGroup("def").set("relpermeability", "1000");
+    model.component("comp1").material("mat1").propertyGroup("def").set("electricconductivity", "0.01[S/m]");
+
+    model.component("comp1").physics().create("mf", "MagneticFields", "geom1");
+    model.component("comp1").physics("mf").create("magins1", "MagneticInsulation", 2);
+    model.component("comp1").physics("mf").feature("magins1").selection().named("sel_ins");
+
+    model.component("comp1").physics("mf").create("sc1", "SurfaceCurrent", 2);
+    model.component("comp1").physics("mf").feature("sc1").selection().named("sel_coil");
+    model.component("comp1").physics("mf").feature("sc1").set("Js0", new String[]{"0", "Js0", "0"});
+
+    model.component("comp1").mesh().create("mesh1");
+    model.component("comp1").mesh("mesh1").autoMeshSize(4);
+    model.component("comp1").mesh("mesh1").run();
+
+    model.study().create("std1");
+    model.study("std1").create("stat", "Stationary");
+    model.study("std1").run();
+    return model;
+  }
+
+  public static void main(String[] args) {
+    run();
+  }
+}
+`
+  },
+
   "mph-python": {
     language: "python",
     description: "Python MPh runner for model inspection, parameter update, solving, and expression evaluation",
@@ -277,7 +466,9 @@ const REMEDIATION_HINTS = {
   SOLVER_NONCONVERGENCE:
     "Hint: Check for missing boundary constraints causing a singular matrix (verify Box selections actually capture boundary entities), check material properties on all domains, or use auxiliary continuation sweep.",
   COMPILE_ERROR:
-    "Hint: Ensure 'import com.comsol.model.*;' and 'import com.comsol.model.util.*;' are present, class name matches filename, and COMSOL 6.2 API uses .create(tag, type), .selection('input').set(new String[]{...}), and String[] for vector properties."
+    "Hint: Ensure 'import com.comsol.model.*;' and 'import com.comsol.model.util.*;' are present, class name matches filename, and COMSOL 6.2 API uses .create(tag, type), .selection('input').set(new String[]{...}), and String[] for vector properties.",
+  SCIENTIFIC_INTEGRITY_VIOLATION:
+    "Hint: General scientific rigor check failed (non-physical gain, violation of energy conservation/passivity, singular/unphysical fields, or boundary truncation artifacts). Adjust model parameters, boundary conditions, or sweep bounds to restore physical validity."
 };
 
 function validateJavaModelSource(sourceCode, expectedClassName = null) {

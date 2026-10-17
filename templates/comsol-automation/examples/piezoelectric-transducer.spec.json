@@ -1,0 +1,60 @@
+{
+  "className": "PiezoelectricTransducerModel",
+  "parameters": {
+    "L_pzt": "15[mm]",
+    "W_pzt": "15[mm]",
+    "H_pzt": "3[mm]",
+    "V_drive": "100[V]"
+  },
+  "geometry": {
+    "dimension": 3,
+    "features": [
+      {
+        "tag": "blk_pzt",
+        "type": "Block",
+        "size": ["L_pzt", "W_pzt", "H_pzt"],
+        "pos": ["0[mm]", "0[mm]", "0[mm]"]
+      }
+    ],
+    "selections": [
+      { "tag": "sel_bottom", "type": "FaceBox", "feature": "blk_pzt", "face": "zmin", "entitydim": 2 },
+      { "tag": "sel_top", "type": "FaceBox", "feature": "blk_pzt", "face": "zmax", "entitydim": 2 }
+    ]
+  },
+  "materials": [
+    {
+      "tag": "mat_pzt",
+      "label": "PZT-5H Ceramic",
+      "selection": "all",
+      "properties": {
+        "density": "7500[kg/m^3]",
+        "youngsmodulus": "60e9[Pa]",
+        "poissonsratio": "0.31",
+        "relpermittivity": "1700"
+      }
+    }
+  ],
+  "physics": [
+    {
+      "tag": "solid",
+      "type": "SolidMechanics",
+      "initialValues": { "u": ["0", "0", "0"] },
+      "features": [
+        { "tag": "fix1", "type": "Fixed", "selection": "sel_bottom", "props": {} }
+      ]
+    },
+    {
+      "tag": "es",
+      "type": "Electrostatics",
+      "initialValues": { "V": "0[V]" },
+      "features": [
+        { "tag": "gnd1", "type": "Ground", "selection": "sel_bottom", "props": {} },
+        { "tag": "pot1", "type": "ElectricPotential", "selection": "sel_top", "props": { "V0": "V_drive" } }
+      ]
+    }
+  ],
+  "couplings": [
+    { "tag": "pzd1", "type": "Piezoelectricity", "selection": "all" }
+  ],
+  "study": { "type": "Stationary" }
+}

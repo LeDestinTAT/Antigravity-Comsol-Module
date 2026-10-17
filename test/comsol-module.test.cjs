@@ -360,7 +360,7 @@ test("10. Geometry CLI rejects missing, bare and conflicting input options", () 
 
 test("11. Physics Understanding & Well-Posedness Validation: catches underconstrained PDEs, conflicting BCs, dimension mismatches & missing coupled properties", () => {
   const presets = comsol.listPhysicsPresets();
-  assert.equal(presets.length, 3);
+  assert.ok(presets.length >= 3);
   for (const p of presets) {
     const presetObj = comsol.getPhysicsPreset(p.name);
     const val = comsol.validatePhysicsSpec(presetObj.spec);

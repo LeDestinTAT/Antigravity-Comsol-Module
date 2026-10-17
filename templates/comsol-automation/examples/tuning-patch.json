@@ -1,0 +1,31 @@
+{
+  "parameters": {
+    "T_in": "300[K]",
+    "U_in": "0.3[m/s]",
+    "q_base": "8e4[W/m^2]"
+  },
+  "initialValues": {
+    "ht": {
+      "T": "300[K]"
+    },
+    "spf": {
+      "u": ["0.3[m/s]", "0", "0"],
+      "p": "0[Pa]"
+    }
+  },
+  "boundaryOverrides": [
+    {
+      "physicsTag": "ht",
+      "featureTag": "hf1",
+      "type": "HeatFluxBoundary",
+      "props": {
+        "q0": "q_base"
+      }
+    }
+  ],
+  "studyTuning": {
+    "continuationParam": "U_in",
+    "continuationList": "0.05 0.1 0.2 0.3"
+  },
+  "autoAlignInitialValues": true
+}

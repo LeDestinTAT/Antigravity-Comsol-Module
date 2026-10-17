@@ -1,0 +1,47 @@
+{
+  "className": "AcousticCavityModel",
+  "parameters": {
+    "L_cav": "100[mm]",
+    "W_cav": "50[mm]",
+    "H_cav": "50[mm]",
+    "a_drive": "1[m/s^2]"
+  },
+  "geometry": {
+    "dimension": 3,
+    "features": [
+      {
+        "tag": "blk_cav",
+        "type": "Block",
+        "size": ["L_cav", "W_cav", "H_cav"],
+        "pos": ["0[mm]", "0[mm]", "0[mm]"]
+      }
+    ],
+    "selections": [
+      { "tag": "sel_driver", "type": "FaceBox", "feature": "blk_cav", "face": "xmin", "entitydim": 2 },
+      { "tag": "sel_hard_wall", "type": "FaceBox", "feature": "blk_cav", "face": "xmax", "entitydim": 2 }
+    ]
+  },
+  "materials": [
+    {
+      "tag": "mat_air",
+      "label": "Air",
+      "selection": "all",
+      "properties": {
+        "density": "1.204[kg/m^3]",
+        "soundspeed": "343.2[m/s]"
+      }
+    }
+  ],
+  "physics": [
+    {
+      "tag": "acpr",
+      "type": "PressureAcoustics",
+      "initialValues": { "p": "0[Pa]" },
+      "features": [
+        { "tag": "acc1", "type": "NormalAcceleration", "selection": "sel_driver", "props": { "an0": "a_drive" } },
+        { "tag": "wall1", "type": "SoundHardWall", "selection": "sel_hard_wall", "props": {} }
+      ]
+    }
+  ],
+  "study": { "type": "Stationary" }
+}

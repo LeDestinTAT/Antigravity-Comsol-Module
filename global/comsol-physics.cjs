@@ -2,41 +2,108 @@ const path = require("node:path");
 const GEOM_MOD = require(path.join(__dirname, "comsol-geometry.cjs"));
 
 const PHYSICS_CATALOG = {
-  HeatTransfer: {
-    defaultTag: "ht",
-    dependentVars: ["T"],
-    requiredMaterialProps: ["thermalconductivity", "density", "heatcapacity"],
-    referenceBoundaryTypes: ["TemperatureBoundary", "ConvectiveHeatFlux", "DiffuseSurface"]
+  // 1. 力 (Mechanics & Fluid Flow)
+  SolidMechanics: {
+    domain: "mechanics",
+    defaultTag: "solid",
+    dependentVars: ["u"],
+    requiredMaterialProps: ["youngsmodulus", "poissonsratio", "density"],
+    referenceBoundaryTypes: ["Fixed", "PrescribedDisplacement", "Roller", "Symmetry"]
   },
   LaminarFlow: {
+    domain: "fluid",
     defaultTag: "spf",
     dependentVars: ["u", "p"],
     requiredMaterialProps: ["density", "dynamicviscosity"],
     referenceBoundaryTypes: ["OutletBoundary", "PressurePointConstraint", "OpenBoundary"],
     requiredDriveTypes: ["InletBoundary", "MovingWall", "OpenBoundary"]
   },
-  SolidMechanics: {
-    defaultTag: "solid",
-    dependentVars: ["u"],
-    requiredMaterialProps: ["youngsmodulus", "poissonsratio", "density"],
-    referenceBoundaryTypes: ["Fixed", "PrescribedDisplacement", "Roller", "Symmetry"]
+
+  // 2. 热 (Thermal)
+  HeatTransfer: {
+    domain: "thermal",
+    defaultTag: "ht",
+    dependentVars: ["T"],
+    requiredMaterialProps: ["thermalconductivity", "density", "heatcapacity"],
+    referenceBoundaryTypes: ["TemperatureBoundary", "ConvectiveHeatFlux", "DiffuseSurface", "ThermalInsulation"]
   },
+
+  // 3. 声 (Acoustics)
+  PressureAcoustics: {
+    domain: "acoustics",
+    defaultTag: "acpr",
+    dependentVars: ["p"],
+    requiredMaterialProps: ["density", "soundspeed"],
+    referenceBoundaryTypes: [
+      "SoundHardWall",
+      "SoundSoftWall",
+      "Pressure",
+      "NormalAcceleration",
+      "NormalVelocity",
+      "Impedance",
+      "RadiationCondition",
+      "Symmetry"
+    ]
+  },
+
+  // 4. 光 / 波动光学 / 射频 (Optics / Wave Optics / RF)
+  ElectromagneticWavesFrequencyDomain: {
+    domain: "optics",
+    defaultTag: "ewfd",
+    dependentVars: ["E"],
+    requiredMaterialProps: ["relpermittivity", "relpermeability"],
+    referenceBoundaryTypes: [
+      "PerfectElectricConductor",
+      "PerfectMagneticConductor",
+      "Port",
+      "ScatteringBoundaryCondition",
+      "ElectricField",
+      "MagneticField",
+      "SurfaceCurrent"
+    ]
+  },
+  WaveOptics: {
+    domain: "optics",
+    defaultTag: "ewfd",
+    dependentVars: ["E"],
+    requiredMaterialProps: ["relpermittivity", "relpermeability"],
+    referenceBoundaryTypes: [
+      "PerfectElectricConductor",
+      "PerfectMagneticConductor",
+      "Port",
+      "ScatteringBoundaryCondition",
+      "ElectricField",
+      "MagneticField",
+      "SurfaceCurrent"
+    ]
+  },
+
+  // 5. 电 (Electromagnetics - Statics, Currents, Magnetics)
   Electrostatics: {
+    domain: "electrostatics",
     defaultTag: "es",
     dependentVars: ["V"],
     requiredMaterialProps: ["relpermittivity"],
-    referenceBoundaryTypes: ["Ground", "ElectricPotential"]
+    referenceBoundaryTypes: ["Ground", "ElectricPotential", "ZeroCharge"]
   },
   ElectricCurrents: {
+    domain: "electric-currents",
     defaultTag: "ec",
     dependentVars: ["V"],
     requiredMaterialProps: ["electricconductivity"],
-    referenceBoundaryTypes: ["Ground", "ElectricPotential"]
+    referenceBoundaryTypes: ["Ground", "ElectricPotential", "NormalCurrentDensity", "ElectricInsulation"]
+  },
+  MagneticFields: {
+    domain: "magnetics",
+    defaultTag: "mf",
+    dependentVars: ["A"],
+    requiredMaterialProps: ["relpermeability", "electricconductivity"],
+    referenceBoundaryTypes: ["MagneticInsulation", "MagneticPotential", "SurfaceCurrent", "MagneticField"]
   }
 };
 
 const FEATURE_CATALOG = {
-  // HeatTransfer
+  // --- 热 (HeatTransfer) ---
   TemperatureBoundary: { entitydim: 2, comsolType: "TemperatureBoundary", conflictGroup: "ht_dirichlet" },
   HeatFluxBoundary: { entitydim: 2, comsolType: "HeatFluxBoundary", conflictGroup: null },
   ConvectiveHeatFlux: {
@@ -50,7 +117,7 @@ const FEATURE_CATALOG = {
   HeatSource: { entitydim: 3, comsolType: "HeatSource", conflictGroup: null },
   Fluid: { entitydim: 3, comsolType: "Fluid", conflictGroup: null },
 
-  // LaminarFlow
+  // --- 力 (LaminarFlow & SolidMechanics) ---
   InletBoundary: { entitydim: 2, comsolType: "InletBoundary", conflictGroup: "spf_bnd" },
   OutletBoundary: { entitydim: 2, comsolType: "OutletBoundary", conflictGroup: "spf_bnd" },
   Wall: { entitydim: 2, comsolType: "Wall", conflictGroup: "spf_bnd" },
@@ -63,7 +130,6 @@ const FEATURE_CATALOG = {
   OpenBoundary: { entitydim: 2, comsolType: "OpenBoundary", conflictGroup: "spf_bnd" },
   PressurePointConstraint: { entitydim: 0, comsolType: "PressurePointConstraint", conflictGroup: null },
 
-  // SolidMechanics
   Fixed: { entitydim: 2, comsolType: "Fixed", conflictGroup: "solid_constraint" },
   PrescribedDisplacement: {
     entitydim: 2,
@@ -75,13 +141,37 @@ const FEATURE_CATALOG = {
   BoundaryLoad: { entitydim: 2, comsolType: "BoundaryLoad", conflictGroup: "solid_constraint" },
   BodyLoad: { entitydim: 3, comsolType: "BodyLoad", conflictGroup: null },
 
-  // Electrostatics / ElectricCurrents
+  // --- 声 (PressureAcoustics) ---
+  SoundHardWall: { entitydim: 2, comsolType: "SoundHardWall", conflictGroup: "acpr_bnd" },
+  SoundSoftWall: { entitydim: 2, comsolType: "SoundSoftWall", conflictGroup: "acpr_bnd" },
+  Pressure: { entitydim: 2, comsolType: "Pressure", conflictGroup: "acpr_bnd" },
+  NormalAcceleration: { entitydim: 2, comsolType: "NormalAcceleration", conflictGroup: "acpr_bnd" },
+  NormalVelocity: { entitydim: 2, comsolType: "NormalVelocity", conflictGroup: "acpr_bnd" },
+  Impedance: { entitydim: 2, comsolType: "Impedance", conflictGroup: "acpr_bnd" },
+  RadiationCondition: { entitydim: 2, comsolType: "RadiationCondition", conflictGroup: "acpr_bnd" },
+
+  // --- 光 / 波动光学 / 射频 (ElectromagneticWavesFrequencyDomain) ---
+  PerfectElectricConductor: { entitydim: 2, comsolType: "PerfectElectricConductor", conflictGroup: "ewfd_pec" },
+  PerfectMagneticConductor: { entitydim: 2, comsolType: "PerfectMagneticConductor", conflictGroup: "ewfd_pec" },
+  Port: { entitydim: 2, comsolType: "Port", conflictGroup: null },
+  ScatteringBoundaryCondition: { entitydim: 2, comsolType: "ScatteringBoundaryCondition", conflictGroup: null },
+  ElectricField: { entitydim: 2, comsolType: "ElectricField", conflictGroup: "ewfd_pec" },
+  MagneticField: { entitydim: 2, comsolType: "MagneticField", conflictGroup: null },
+
+  // --- 电 (Electrostatics, ElectricCurrents, MagneticFields) ---
   Ground: { entitydim: 2, comsolType: "Ground", conflictGroup: "em_potential" },
   ElectricPotential: { entitydim: 2, comsolType: "ElectricPotential", conflictGroup: "em_potential" },
   NormalCurrentDensity: { entitydim: 2, comsolType: "NormalCurrentDensity", conflictGroup: null },
   SurfaceChargeDensity: { entitydim: 2, comsolType: "SurfaceChargeDensity", conflictGroup: null },
   CurrentSource: { entitydim: 3, comsolType: "CurrentSource", conflictGroup: null },
-  SpaceChargeDensity: { entitydim: 3, comsolType: "SpaceChargeDensity", conflictGroup: null }
+  SpaceChargeDensity: { entitydim: 3, comsolType: "SpaceChargeDensity", conflictGroup: null },
+  ElectricInsulation: { entitydim: 2, comsolType: "ElectricInsulation", conflictGroup: "ec_dirichlet" },
+  ZeroCharge: { entitydim: 2, comsolType: "ZeroCharge", conflictGroup: "es_dirichlet" },
+
+  MagneticInsulation: { entitydim: 2, comsolType: "MagneticInsulation", conflictGroup: "mf_dirichlet" },
+  MagneticPotential: { entitydim: 2, comsolType: "MagneticPotential", conflictGroup: "mf_dirichlet" },
+  SurfaceCurrent: { entitydim: 2, comsolType: "SurfaceCurrent", conflictGroup: null },
+  ExternalCurrentDensity: { entitydim: 3, comsolType: "ExternalCurrentDensity", conflictGroup: null }
 };
 
 const VECTOR_PROPERTIES = new Set([
@@ -90,10 +180,18 @@ const VECTOR_PROPERTIES = new Set([
   "FperVol",
   "u0",
   "u_wall",
-  "thermalconductivity"
+  "thermalconductivity",
+  "E0",
+  "A0",
+  "H0",
+  "an0",
+  "Js0",
+  "Je",
+  "u_prescribed"
 ]);
 
 const COUPLING_CATALOG = {
+  // [力 - 热]
   NonIsothermalFlow: {
     defaultTag: "nitf1",
     dim: 3,
@@ -104,6 +202,7 @@ const COUPLING_CATALOG = {
       Heat_physics: "HeatTransfer"
     }
   },
+  // [力 - 热]
   ThermalExpansion: {
     defaultTag: "te1",
     dim: 3,
@@ -114,16 +213,21 @@ const COUPLING_CATALOG = {
       Solid_physics: "SolidMechanics"
     }
   },
+  // [电/光 - 热]
   ElectromagneticHeating: {
     defaultTag: "emh1",
     dim: 3,
-    requiredInterfaces: ["ElectricCurrents", "HeatTransfer"],
+    requiredInterfaces: [
+      ["ElectricCurrents", "ElectromagneticWavesFrequencyDomain", "WaveOptics"],
+      "HeatTransfer"
+    ],
     requiredMaterialProps: [],
     physicsBindings: {
-      Electromagnetic_physics: "ElectricCurrents",
+      Electromagnetic_physics: ["ElectricCurrents", "ElectromagneticWavesFrequencyDomain", "WaveOptics"],
       Heat_physics: "HeatTransfer"
     }
   },
+  // [力 - 力]
   FluidStructureInteraction: {
     defaultTag: "fsi1",
     dim: 3,
@@ -131,6 +235,39 @@ const COUPLING_CATALOG = {
     requiredMaterialProps: [],
     physicsBindings: {
       Fluid_physics: "LaminarFlow",
+      Solid_physics: "SolidMechanics"
+    }
+  },
+  // [声 - 力]
+  AcousticStructureBoundary: {
+    defaultTag: "asb1",
+    dim: 2,
+    requiredInterfaces: ["PressureAcoustics", "SolidMechanics"],
+    requiredMaterialProps: [],
+    physicsBindings: {
+      Acoustic_physics: "PressureAcoustics",
+      Solid_physics: "SolidMechanics"
+    }
+  },
+  // [力 - 电]
+  Piezoelectricity: {
+    defaultTag: "pzd1",
+    dim: 3,
+    requiredInterfaces: ["SolidMechanics", "Electrostatics"],
+    requiredMaterialProps: [],
+    physicsBindings: {
+      Solid_physics: "SolidMechanics",
+      Electrostatics_physics: "Electrostatics"
+    }
+  },
+  // [电 - 力]
+  LorentzForce: {
+    defaultTag: "lor1",
+    dim: 3,
+    requiredInterfaces: ["MagneticFields", "SolidMechanics"],
+    requiredMaterialProps: [],
+    physicsBindings: {
+      Magnetic_physics: "MagneticFields",
       Solid_physics: "SolidMechanics"
     }
   }
@@ -402,15 +539,24 @@ function validatePhysicsSpec(rawSpec = {}) {
       continue;
     }
     for (const reqPhys of cMeta.requiredInterfaces) {
-      const explicitTag = cpl.physics && cpl.physics[reqPhys];
-      if (explicitTag && explicitTag !== activeByType[reqPhys]) {
-        errors.push(
-          `MISSING_COUPLED_PHYSICS: Multiphysics coupling '${cpl.type}' references missing physics tag '${explicitTag}' for '${reqPhys}'`
-        );
-      } else if (!activeByType[reqPhys]) {
-        errors.push(
-          `MISSING_COUPLED_PHYSICS: Multiphysics coupling '${cpl.type}' requires physics interface '${reqPhys}'`
-        );
+      if (Array.isArray(reqPhys)) {
+        const found = reqPhys.some(cand => activeByType[cand]);
+        if (!found) {
+          errors.push(
+            `MISSING_COUPLED_PHYSICS: Multiphysics coupling '${cpl.type}' requires at least one of: ${reqPhys.join(" | ")}`
+          );
+        }
+      } else {
+        const explicitTag = cpl.physics && cpl.physics[reqPhys];
+        if (explicitTag && explicitTag !== activeByType[reqPhys]) {
+          errors.push(
+            `MISSING_COUPLED_PHYSICS: Multiphysics coupling '${cpl.type}' references missing physics tag '${explicitTag}' for '${reqPhys}'`
+          );
+        } else if (!activeByType[reqPhys]) {
+          errors.push(
+            `MISSING_COUPLED_PHYSICS: Multiphysics coupling '${cpl.type}' requires physics interface '${reqPhys}'`
+          );
+        }
       }
     }
     if (materials.length > 0) {
@@ -549,6 +695,24 @@ function tunePhysicsSpec(spec = {}, adjustments = {}) {
           phys.initialValues.V = (potFeat.props || potFeat.params).V0;
         } else if (!phys.initialValues.V) {
           phys.initialValues.V = "0[V]";
+        }
+      }
+      if (phys.type === "PressureAcoustics") {
+        const presFeat = feats.find(f => f.type === "Pressure" && (f.props || f.params) && (f.props || f.params).p0);
+        if (presFeat) {
+          phys.initialValues.p = (presFeat.props || presFeat.params).p0;
+        } else if (!phys.initialValues.p) {
+          phys.initialValues.p = "0[Pa]";
+        }
+      }
+      if (phys.type === "ElectromagneticWavesFrequencyDomain" || phys.type === "WaveOptics") {
+        if (!phys.initialValues.E) {
+          phys.initialValues.E = ["0", "0", "0"];
+        }
+      }
+      if (phys.type === "MagneticFields") {
+        if (!phys.initialValues.A) {
+          phys.initialValues.A = ["0", "0", "0"];
         }
       }
     }
@@ -698,7 +862,22 @@ function compilePhysicsSpecToJava(rawSpec = {}, options = {}) {
       `    model.component(${cStr}).multiphysics().create(${cTag}, ${JSON.stringify(cpl.type)}, ${cDim});`
     );
     for (const [bindProp, reqType] of Object.entries(cMeta.physicsBindings)) {
-      const boundTag = validation.activePhysics[reqType] || PHYSICS_CATALOG[reqType].defaultTag;
+      let boundTag = null;
+      if (Array.isArray(reqType)) {
+        for (const cand of reqType) {
+          if (validation.activePhysics && validation.activePhysics[cand]) {
+            boundTag = validation.activePhysics[cand];
+            break;
+          }
+        }
+        if (!boundTag && reqType[0] && PHYSICS_CATALOG[reqType[0]]) {
+          boundTag = PHYSICS_CATALOG[reqType[0]].defaultTag;
+        }
+      } else {
+        boundTag =
+          (validation.activePhysics && validation.activePhysics[reqType]) ||
+          (PHYSICS_CATALOG[reqType] ? PHYSICS_CATALOG[reqType].defaultTag : reqType);
+      }
       lines.push(
         `    model.component(${cStr}).multiphysics(${cTag}).set(${JSON.stringify(bindProp)}, ${JSON.stringify(boundTag)});`
       );
@@ -786,11 +965,12 @@ function auditJavaPhysicsCode(sourceCode) {
     }
   }
 
-  const physCreates = [
-    ...code.matchAll(
-      /\.physics\(\)\.create\(\s*"([^"]+)"\s*,\s*"(HeatTransfer|LaminarFlow|SolidMechanics|Electrostatics|ElectricCurrents)"/g
-    )
-  ];
+  const physNames = Object.keys(PHYSICS_CATALOG).join("|");
+  const physRegex = new RegExp(
+    `\\.physics\\(\\)\\.create\\(\\s*"([^"]+)"\\s*,\\s*"(${physNames})"`,
+    "g"
+  );
+  const physCreates = [...code.matchAll(physRegex)];
 
   for (const match of physCreates) {
     const pTag = match[1];
@@ -816,11 +996,12 @@ function auditJavaPhysicsCode(sourceCode) {
     }
   }
 
-  const couplingCreates = [
-    ...code.matchAll(
-      /\.multiphysics\(\)\.create\(\s*"([^"]+)"\s*,\s*"(NonIsothermalFlow|ThermalExpansion|ElectromagneticHeating|FluidStructureInteraction)"/g
-    )
-  ];
+  const couplingNames = Object.keys(COUPLING_CATALOG).join("|");
+  const couplingRegex = new RegExp(
+    `\\.multiphysics\\(\\)\\.create\\(\\s*"([^"]+)"\\s*,\\s*"(${couplingNames})"`,
+    "g"
+  );
+  const couplingCreates = [...code.matchAll(couplingRegex)];
   for (const match of couplingCreates) {
     const cTag = match[1];
     const cType = match[2];
@@ -1039,6 +1220,223 @@ const PHYSICS_PRESETS = {
         }
       ],
       couplings: [{ tag: "emh1", type: "ElectromagneticHeating", selection: "all" }],
+      study: { type: "Stationary" }
+    }
+  },
+
+  "acoustic-cavity-resonator": {
+    description: "COMSOL 6.2 3D Pressure Acoustics in an Air Cavity (PressureAcoustics) with SoundHardWall and NormalAcceleration boundary excitation",
+    spec: {
+      className: "AcousticCavityResonatorModel",
+      parameters: {
+        L_cav: "100[mm]",
+        W_cav: "50[mm]",
+        H_cav: "50[mm]",
+        a_in: "1[m/s^2]"
+      },
+      geometry: {
+        dimension: 3,
+        features: [
+          {
+            tag: "blk_cav",
+            type: "Block",
+            size: ["L_cav", "W_cav", "H_cav"],
+            pos: ["0[mm]", "0[mm]", "0[mm]"]
+          }
+        ],
+        selections: [
+          { tag: "sel_driver", type: "FaceBox", feature: "blk_cav", face: "xmin", entitydim: 2 },
+          { tag: "sel_hard_wall", type: "FaceBox", feature: "blk_cav", face: "xmax", entitydim: 2 }
+        ]
+      },
+      materials: [
+        {
+          tag: "mat_air",
+          label: "Air",
+          selection: "all",
+          properties: {
+            density: "1.204[kg/m^3]",
+            soundspeed: "343.2[m/s]"
+          }
+        }
+      ],
+      physics: [
+        {
+          tag: "acpr",
+          type: "PressureAcoustics",
+          initialValues: { p: "0[Pa]" },
+          features: [
+            { tag: "acc1", type: "NormalAcceleration", selection: "sel_driver", props: { an0: "a_in" } },
+            { tag: "wall1", type: "SoundHardWall", selection: "sel_hard_wall", props: {} }
+          ]
+        }
+      ],
+      study: { type: "Stationary" }
+    }
+  },
+
+  "optical-waveguide": {
+    description: "COMSOL 6.2 3D Wave Optics / RF (ElectromagneticWavesFrequencyDomain) Dielectric Waveguide with Port and Scattering boundaries",
+    spec: {
+      className: "OpticalWaveguideModel",
+      parameters: {
+        L_wg: "20[um]",
+        W_wg: "2[um]",
+        H_wg: "1[um]",
+        E_in: "1[V/m]"
+      },
+      geometry: {
+        dimension: 3,
+        features: [
+          {
+            tag: "blk_wg",
+            type: "Block",
+            size: ["L_wg", "W_wg", "H_wg"],
+            pos: ["0[um]", "0[um]", "0[um]"]
+          }
+        ],
+        selections: [
+          { tag: "sel_port_in", type: "FaceBox", feature: "blk_wg", face: "xmin", entitydim: 2 },
+          { tag: "sel_port_out", type: "FaceBox", feature: "blk_wg", face: "xmax", entitydim: 2 },
+          { tag: "sel_sides", type: "FaceBox", feature: "blk_wg", face: "ymin", entitydim: 2 }
+        ]
+      },
+      materials: [
+        {
+          tag: "mat_silicon",
+          label: "Silicon Core",
+          selection: "all",
+          properties: {
+            relpermittivity: "11.68",
+            relpermeability: "1"
+          }
+        }
+      ],
+      physics: [
+        {
+          tag: "ewfd",
+          type: "ElectromagneticWavesFrequencyDomain",
+          initialValues: { E: ["0", "0", "0"] },
+          features: [
+            { tag: "sbc1", type: "ScatteringBoundaryCondition", selection: "sel_port_in", props: { WaveType: "PlaneWave" } },
+            { tag: "pec1", type: "PerfectElectricConductor", selection: "sel_sides", props: {} },
+            { tag: "sbc2", type: "ScatteringBoundaryCondition", selection: "sel_port_out", props: { WaveType: "PlaneWave" } }
+          ]
+        }
+      ],
+      study: { type: "Stationary" }
+    }
+  },
+
+  "magnetic-inductor": {
+    description: "COMSOL 6.2 3D Magnetic Fields (MagneticFields) with Magnetic Insulation and Surface Current Excitation",
+    spec: {
+      className: "MagneticInductorModel",
+      parameters: {
+        L_core: "30[mm]",
+        W_core: "10[mm]",
+        H_core: "10[mm]",
+        Js_drive: "5000[A/m]"
+      },
+      geometry: {
+        dimension: 3,
+        features: [
+          {
+            tag: "blk_core",
+            type: "Block",
+            size: ["L_core", "W_core", "H_core"],
+            pos: ["0[mm]", "0[mm]", "0[mm]"]
+          }
+        ],
+        selections: [
+          { tag: "sel_coil_surf", type: "FaceBox", feature: "blk_core", face: "zmax", entitydim: 2 },
+          { tag: "sel_mag_ins", type: "FaceBox", feature: "blk_core", face: "xmin", entitydim: 2 }
+        ]
+      },
+      materials: [
+        {
+          tag: "mat_ferrite",
+          label: "Ferrite Core",
+          selection: "all",
+          properties: {
+            relpermeability: "1000",
+            electricconductivity: "0.01[S/m]"
+          }
+        }
+      ],
+      physics: [
+        {
+          tag: "mf",
+          type: "MagneticFields",
+          initialValues: { A: ["0", "0", "0"] },
+          features: [
+            { tag: "magins1", type: "MagneticInsulation", selection: "sel_mag_ins", props: {} },
+            { tag: "sc1", type: "SurfaceCurrent", selection: "sel_coil_surf", props: { Js0: ["0", "Js_drive", "0"] } }
+          ]
+        }
+      ],
+      study: { type: "Stationary" }
+    }
+  },
+
+  "piezoelectric-transducer": {
+    description: "COMSOL 6.2 3D Piezoelectric Transducer (SolidMechanics + Electrostatics + Piezoelectricity)",
+    spec: {
+      className: "PiezoelectricTransducerModel",
+      parameters: {
+        L_pzt: "15[mm]",
+        W_pzt: "15[mm]",
+        H_pzt: "3[mm]",
+        V_drive: "100[V]"
+      },
+      geometry: {
+        dimension: 3,
+        features: [
+          {
+            tag: "blk_pzt",
+            type: "Block",
+            size: ["L_pzt", "W_pzt", "H_pzt"],
+            pos: ["0[mm]", "0[mm]", "0[mm]"]
+          }
+        ],
+        selections: [
+          { tag: "sel_bottom", type: "FaceBox", feature: "blk_pzt", face: "zmin", entitydim: 2 },
+          { tag: "sel_top", type: "FaceBox", feature: "blk_pzt", face: "zmax", entitydim: 2 }
+        ]
+      },
+      materials: [
+        {
+          tag: "mat_pzt",
+          label: "PZT-5H Ceramic",
+          selection: "all",
+          properties: {
+            density: "7500[kg/m^3]",
+            youngsmodulus: "60e9[Pa]",
+            poissonsratio: "0.31",
+            relpermittivity: "1700"
+          }
+        }
+      ],
+      physics: [
+        {
+          tag: "solid",
+          type: "SolidMechanics",
+          initialValues: { u: ["0", "0", "0"] },
+          features: [
+            { tag: "fix1", type: "Fixed", selection: "sel_bottom", props: {} }
+          ]
+        },
+        {
+          tag: "es",
+          type: "Electrostatics",
+          initialValues: { V: "0[V]" },
+          features: [
+            { tag: "gnd1", type: "Ground", selection: "sel_bottom", props: {} },
+            { tag: "pot1", type: "ElectricPotential", selection: "sel_top", props: { V0: "V_drive" } }
+          ]
+        }
+      ],
+      couplings: [{ tag: "pzd1", type: "Piezoelectricity", selection: "all" }],
       study: { type: "Stationary" }
     }
   }

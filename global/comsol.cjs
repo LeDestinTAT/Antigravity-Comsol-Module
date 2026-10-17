@@ -321,6 +321,18 @@ const LOG_RULES = [
     status: "LICENSE_OR_ENV_ERROR",
     summary: "COMSOL license or runtime environment failure",
     patterns: [/license error/i, /could not obtain license/i, /no license for/i]
+  },
+  {
+    status: "SCIENTIFIC_INTEGRITY_VIOLATION",
+    summary: "COMSOL scientific validity constraint violation (passivity, conservation of energy, physical limits, or non-physical boundaries)",
+    patterns: [
+      /scientific integrity violation/i,
+      /scientific rigor check failed/i,
+      /unphysical gain detected/i,
+      /violation of energy conservation/i,
+      /passivity violation/i,
+      /unphysical negative dissipation/i
+    ]
   }
 ];
 
@@ -460,7 +472,8 @@ function scaffoldJavaModel({ domain = "heat-transfer", outputFile, className }) 
   if (tpl.language !== "java") {
     throw new Error(`Template '${domain}' is a ${tpl.language} template, not a Java model template`);
   }
-  const resolvedOut = path.resolve(outputFile);
+  const defaultFile = `${domain.replace(/(?:^|-)([a-z])/g, (_, c) => c.toUpperCase())}Model.java`;
+  const resolvedOut = path.resolve(outputFile || defaultFile);
   const inferredClass = className || path.basename(resolvedOut, ".java");
   const code = tpl.code.replace(/public\s+class\s+[A-Za-z0-9_]+/, `public class ${inferredClass}`);
   fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
@@ -702,6 +715,7 @@ function runComsolBatch(options = {}) {
     "MESH_ERROR",
     "SOLVER_NONCONVERGENCE",
     "PARAMETER_ERROR",
+    "SCIENTIFIC_INTEGRITY_VIOLATION",
     "UNKNOWN_ERROR"
   ].includes(parseResult.status);
 

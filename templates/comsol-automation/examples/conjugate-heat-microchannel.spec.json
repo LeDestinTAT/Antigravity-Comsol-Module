@@ -1,0 +1,77 @@
+{
+  "className": "ConjugateHeatMicrochannelModel",
+  "geometryPreset": "microchannel-heatsink",
+  "parameters": {
+    "T_in": "293.15[K]",
+    "q_base": "5e4[W/m^2]",
+    "U_in": "0.2[m/s]"
+  },
+  "materials": [
+    {
+      "tag": "mat_water",
+      "label": "Cooling Fluid & Substrate Effective Props",
+      "selection": "all",
+      "properties": {
+        "density": "1000[kg/m^3]",
+        "dynamicviscosity": "1e-3[Pa*s]",
+        "thermalconductivity": ["0.6[W/(m*K)]"],
+        "heatcapacity": "4184[J/(kg*K)]"
+      }
+    }
+  ],
+  "physics": [
+    {
+      "tag": "spf",
+      "type": "LaminarFlow",
+      "initialValues": {
+        "u": ["U_in", "0", "0"],
+        "p": "0[Pa]"
+      },
+      "features": [
+        {
+          "tag": "inl1",
+          "type": "InletBoundary",
+          "selection": "sel_inlet",
+          "props": { "U0in": "U_in" }
+        },
+        {
+          "tag": "out1",
+          "type": "OutletBoundary",
+          "selection": "sel_outlet",
+          "props": { "p0": "0[Pa]" }
+        }
+      ]
+    },
+    {
+      "tag": "ht",
+      "type": "HeatTransfer",
+      "initialValues": {
+        "T": "T_in"
+      },
+      "features": [
+        {
+          "tag": "temp1",
+          "type": "TemperatureBoundary",
+          "selection": "sel_inlet",
+          "props": { "T0": "T_in" }
+        },
+        {
+          "tag": "hf1",
+          "type": "HeatFluxBoundary",
+          "selection": "sel_heated_base",
+          "props": { "q0": "q_base" }
+        }
+      ]
+    }
+  ],
+  "couplings": [
+    {
+      "tag": "nitf1",
+      "type": "NonIsothermalFlow",
+      "selection": "all"
+    }
+  ],
+  "study": {
+    "type": "Stationary"
+  }
+}
