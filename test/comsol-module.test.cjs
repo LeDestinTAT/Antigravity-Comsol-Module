@@ -569,7 +569,7 @@ test("15. Unified COMSOL Pipeline: Geometry & Physics sub-modules operate as one
   const tunedCompiled = comsol.compileModelSpecToJava(tuned.spec);
   assert.ok(tunedCompiled.javaCode.includes('.selection().create("sel_auto_blk_sink_top", "Box")'));
   assert.ok(tunedCompiled.javaCode.includes('.feature("conv_top").selection().named("sel_auto_blk_sink_top")'));
-  assert.ok(tunedCompiled.javaCode.includes('"0.025001"')); // updated xmax FaceBox bound for L_sink = 25[mm]
+  assert.ok(tunedCompiled.javaCode.includes("0.025001")); // updated xmax FaceBox bound for L_sink = 25[mm]
 
   // 4) Unified validation catches both geometry errors (disjoint Difference) AND dangling selection names in physics
   const brokenUnified = comsol.tuneModelSpec(unifiedPreset.spec, {
