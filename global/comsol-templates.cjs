@@ -1,5 +1,6 @@
 const path = require("node:path");
 const GEOM_MOD = require(path.join(__dirname, "comsol-geometry.cjs"));
+const PHYS_MOD = require(path.join(__dirname, "comsol-physics.cjs"));
 
 const TEMPLATES = {
   "heat-transfer": {
@@ -303,12 +304,13 @@ function validateJavaModelSource(sourceCode, expectedClassName = null) {
   }
 
   const geomAudit = GEOM_MOD.auditJavaGeometryCode(code);
-  issues.push(...geomAudit.errors);
+  const physAudit = PHYS_MOD.auditJavaPhysicsCode(code);
+  issues.push(...geomAudit.errors, ...physAudit.errors);
 
   return {
     valid: issues.length === 0,
     issues,
-    warnings: geomAudit.warnings
+    warnings: [...geomAudit.warnings, ...physAudit.warnings]
   };
 }
 

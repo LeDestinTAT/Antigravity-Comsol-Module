@@ -1,8 +1,8 @@
 {
   "name": "antigravity-comsol-module",
-  "version": "0.3.0-alpha",
+  "version": "0.4.0-alpha",
   "private": true,
-  "description": "Add-on module for COMSOL 6.2 automation (Precision 3D Geometry Engine, Java API model generation, Python MPh bridge, batch solver, and Dual-Agent closed-loop auto-fix).",
+  "description": "Add-on module for COMSOL 6.2 automation (Precision 3D Geometry Engine, Physics Understanding & Tuning Engine, Java API model generation, Python MPh bridge, batch solver, and Dual-Agent closed-loop auto-fix).",
   "main": "global/comsol.cjs",
   "bin": {
     "comsol-agent": "deploy-comsol.cjs"

@@ -357,3 +357,182 @@ test("10. Geometry CLI rejects missing, bare and conflicting input options", () 
     }
   }
 });
+
+test("11. Physics Understanding & Well-Posedness Validation: catches underconstrained PDEs, conflicting BCs, dimension mismatches & missing coupled properties", () => {
+  const presets = comsol.listPhysicsPresets();
+  assert.equal(presets.length, 3);
+  for (const p of presets) {
+    const presetObj = comsol.getPhysicsPreset(p.name);
+    const val = comsol.validatePhysicsSpec(presetObj.spec);
+    assert.equal(val.valid, true, `Preset ${p.name} should be valid: ${val.errors.join("; ")}`);
+  }
+
+  // Construct an ill-posed physics spec with:
+  // 1) SolidMechanics without Fixed/PrescribedDisplacement in Stationary study -> UNDERCONSTRAINED_PHYSICS
+  // 2) Duplicate Dirichlet TemperatureBoundary on sel_left -> CONFLICTING_BOUNDARY_CONDITIONS
+  // 3) Boundary feature HeatFluxBoundary applied to a 3D domain selection -> DIMENSION_MISMATCH
+  // 4) ThermalExpansion coupling missing thermalexpansioncoefficient in material -> MISSING_MATERIAL_PROPERTY
+  // 5) NonIsothermalFlow referencing nonexistent LaminarFlow tag -> MISSING_COUPLED_PHYSICS
+  const badSpec = {
+    dimension: 3,
+    study: { type: "Stationary" },
+    geometry: {
+      parameters: { L: "10[mm]" },
+      features: [{ tag: "blk1", type: "Block", size: ["L", "L", "L"], selresult: true }],
+      selections: [
+        { tag: "sel_left", type: "FaceBox", feature: "blk1", face: "left" },
+        { tag: "sel_right", type: "FaceBox", feature: "blk1", face: "right" }
+      ]
+    },
+    materials: [
+      {
+        tag: "mat1",
+        selection: "all",
+        properties: {
+          thermalconductivity: "100[W/(m*K)]",
+          density: "2700[kg/m^3]",
+          heatcapacity: "900[J/(kg*K)]",
+          youngsmodulus: "70e9[Pa]",
+          poissonsratio: "0.33"
+          // missing thermalexpansioncoefficient!
+        }
+      }
+    ],
+    physics: [
+      {
+        tag: "ht",
+        type: "HeatTransfer",
+        features: [
+          { tag: "temp_a", type: "TemperatureBoundary", selection: "sel_left", props: { T0: "300[K]" } },
+          { tag: "temp_b", type: "TemperatureBoundary", selection: "sel_left", props: { T0: "400[K]" } },
+          { tag: "hf_wrong_dim", type: "HeatFluxBoundary", selection: "blk1", props: { q0: "1000[W/m^2]" } }
+        ]
+      },
+      {
+        tag: "solid",
+        type: "SolidMechanics",
+        features: [
+          { tag: "load1", type: "BoundaryLoad", selection: "sel_right", props: { FperArea: ["0", "0", "-1e5[Pa]"] } }
+        ]
+      }
+    ],
+    couplings: [
+      { tag: "te1", type: "ThermalExpansion", physics: { HeatTransfer: "ht", SolidMechanics: "solid" } },
+      { tag: "nitf_bad", type: "NonIsothermalFlow", physics: { HeatTransfer: "ht", LaminarFlow: "spf_missing" } }
+    ]
+  };
+
+  const check = comsol.validatePhysicsSpec(badSpec);
+  assert.equal(check.valid, false);
+  assert.ok(check.errors.some(e => e.includes("UNDERCONSTRAINED_PHYSICS") && e.includes("solid")));
+  assert.ok(check.errors.some(e => e.includes("CONFLICTING_BOUNDARY_CONDITIONS") && e.includes("sel_left")));
+  assert.ok(check.errors.some(e => e.includes("DIMENSION_MISMATCH") && e.includes("hf_wrong_dim")));
+  assert.ok(check.errors.some(e => e.includes("MISSING_MATERIAL_PROPERTY") && e.includes("thermalexpansioncoefficient")));
+  assert.ok(check.errors.some(e => e.includes("MISSING_COUPLED_PHYSICS") && e.includes("spf_missing")));
+});
+
+test("12. Physics Tuning Engine (tunePhysicsSpec): adjusts parameters, initial values, boundary overrides, couplings & continuation study ramps", () => {
+  const basePreset = comsol.getPhysicsPreset("thermo-mechanical-bracket");
+  const patch = {
+    parameters: { T_root: "450[K]", F_tip: "-8e5[N/m^2]" },
+    autoAlignInitialValues: true,
+    boundaryOverrides: [
+      {
+        physicsTag: "ht",
+        featureTag: "conv1",
+        type: "ConvectiveHeatFlux",
+        selection: "sel_top",
+        props: { h: "120[W/(m^2*K)]", Text: "293.15[K]" }
+      }
+    ],
+    studyTuning: {
+      rampParam: "F_tip",
+      rampValues: ["-1e5[N/m^2]", "-4e5[N/m^2]", "-8e5[N/m^2]"]
+    }
+  };
+
+  const tunedRes = comsol.tunePhysicsSpec(basePreset.spec, patch);
+  assert.equal(tunedRes.status, "TUNED_PHYSICS_SPEC");
+  assert.equal(tunedRes.validation.valid, true, tunedRes.validation.errors.join("; "));
+  assert.equal(tunedRes.tunedSpec.parameters.T_root, "450[K]");
+  // autoAlignInitialValues sets ht initialValues.T to the first TemperatureBoundary T0 ("T_root")
+  assert.equal(tunedRes.tunedSpec.physics.find(p => p.tag === "ht").initialValues.T, "T_root");
+
+  // Verify conv1 was updated with h = 120[W/(m^2*K)]
+  const htFeatures = tunedRes.tunedSpec.physics.find(p => p.tag === "ht").features;
+  const convFeat = htFeatures.find(f => f.tag === "conv1");
+  assert.equal(convFeat.type, "ConvectiveHeatFlux");
+  assert.equal(convFeat.props.h, "120[W/(m^2*K)]");
+
+  // Verify compiled Java includes continuation ramp and Robin convective boundary condition
+  const compiled = comsol.compilePhysicsSpecToJava(tunedRes.tunedSpec);
+  assert.equal(compiled.status, "COMPILED_PHYSICS_JAVA");
+  assert.ok(compiled.javaCode.includes('.set("FluxType", "ConvectiveHeatFlux")'));
+  assert.ok(compiled.javaCode.includes('.set("useparam", true)'));
+  assert.ok(compiled.javaCode.includes('.set("pname", new String[]{"F_tip"})'));
+  assert.equal(comsol.validateJavaModelSource(compiled.javaCode, compiled.className).valid, true);
+});
+
+test("13. Multiphysics Java Generation across all 3 presets (Conjugate Heat Transfer, Thermo-Mechanical, Joule Heating) passes full Geometry + Physics audits", () => {
+  for (const presetName of ["conjugate-heat-microchannel", "thermo-mechanical-bracket", "joule-heating-busbar"]) {
+    const preset = comsol.getPhysicsPreset(presetName);
+    const compiled = comsol.compilePhysicsSpecToJava(preset.spec);
+    assert.equal(compiled.status, "COMPILED_PHYSICS_JAVA");
+    assert.equal(compiled.validation.valid, true);
+    assert.equal(compiled.geometryAudit.valid, true);
+    assert.equal(compiled.physicsAudit.valid, true);
+    const fullCheck = comsol.validateJavaModelSource(compiled.javaCode, compiled.className);
+    assert.equal(fullCheck.valid, true, `Preset ${presetName} failed static check: ${fullCheck.issues.join("; ")}`);
+  }
+});
+
+test("14. Java Physics Audit (auditJavaPhysicsCode) & Physics CLI commands catch scalar loads, unconstrained physics & unbound couplings", t => {
+  const buggyPhysJava = `
+    import com.comsol.model.*;
+    import com.comsol.model.util.*;
+    public class BuggyPhys {
+      public static void main(String[] args) {
+        Model model = ModelUtil.create("Model");
+        model.component().create("comp1", true);
+        GeomSequence geom = model.component("comp1").geom().create("geom1", 3);
+        geom.create("blk1", "Block");
+        geom.feature("blk1").set("size", new String[]{"1", "1", "1"});
+        geom.run("fin");
+        model.component("comp1").physics().create("solid", "SolidMechanics", "geom1");
+        model.component("comp1").physics("solid").create("bld1", "BoundaryLoad", 2);
+        model.component("comp1").physics("solid").feature("bld1").set("FperArea", "1000[Pa]");
+        model.component("comp1").multiphysics().create("te1", "ThermalExpansion", 3);
+      }
+    }
+  `;
+  const audit = comsol.auditJavaPhysicsCode(buggyPhysJava);
+  assert.equal(audit.valid, false);
+  assert.ok(audit.errors.some(e => e.includes("FperArea") && e.includes("new String[]{...}")));
+  assert.ok(audit.errors.some(e => e.includes("Physics 'SolidMechanics' ('solid') has no Dirichlet/reference constraint")));
+  assert.ok(audit.errors.some(e => e.includes("Multiphysics coupling 'ThermalExpansion' ('te1') is missing")));
+
+  // Verify comments are ignored by auditJavaPhysicsCode
+  const commentedOut = `// model.component("comp1").physics("solid").feature("bld1").set("FperArea", "1000[Pa]");`;
+  assert.equal(comsol.auditJavaPhysicsCode(commentedOut).valid, true);
+
+  // Verify Physics CLI commands (list-physics-presets, validate-physics, build-physics)
+  const root = makeTempDir();
+  t.after(() => cleanupDir(root));
+  const outJava = path.join(root, "BusbarPhys.java");
+  const buildRes = spawnSync(
+    process.execPath,
+    [COMSOL_SCRIPT, "build-physics", "--preset", "joule-heating-busbar", "--out", outJava],
+    { encoding: "utf8" }
+  );
+  assert.equal(buildRes.status, 0, buildRes.stderr);
+  assert.equal(fs.existsSync(outJava), true);
+
+  const auditCli = spawnSync(
+    process.execPath,
+    [COMSOL_SCRIPT, "audit-physics", "--source", outJava],
+    { encoding: "utf8" }
+  );
+  assert.equal(auditCli.status, 0, auditCli.stderr);
+  assert.equal(JSON.parse(auditCli.stdout).valid, true);
+});
+

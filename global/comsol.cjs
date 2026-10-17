@@ -5,6 +5,7 @@ const { spawnSync } = require("node:child_process");
 
 const TEMPLATES_MOD = require(path.join(__dirname, "comsol-templates.cjs"));
 const GEOM_MOD = require(path.join(__dirname, "comsol-geometry.cjs"));
+const PHYS_MOD = require(path.join(__dirname, "comsol-physics.cjs"));
 
 function getHomeDir(overrideHome) {
   if (overrideHome) return path.resolve(overrideHome);
@@ -862,6 +863,118 @@ function main() {
       return;
     }
 
+    if (cmd === "list-physics-presets") {
+      console.log(JSON.stringify(PHYS_MOD.listPhysicsPresets(), null, 2));
+      return;
+    }
+
+    if (cmd === "validate-physics") {
+      const specFile = args.spec || args.input || args._[1];
+      const presetName = args.preset;
+      if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
+          (presetName !== undefined && (typeof presetName !== "string" || !presetName.trim())) ||
+          (!specFile && !presetName)) {
+        throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
+      }
+      if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
+      const spec = presetName
+        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+        : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const res = PHYS_MOD.validatePhysicsSpec(spec);
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.valid) process.exit(2);
+      return;
+    }
+
+    if (cmd === "tune-physics") {
+      const specFile = args.spec || args.input;
+      const presetName = args.preset;
+      if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
+          (presetName !== undefined && (typeof presetName !== "string" || !presetName.trim())) ||
+          (!specFile && !presetName)) {
+        throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
+      }
+      if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
+      const spec = presetName
+        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+        : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const adjustments = args.adjustments
+        ? JSON.parse(fs.readFileSync(args.adjustments, "utf8"))
+        : {};
+      if (args["auto-align-init"]) {
+        adjustments.autoAlignInitialValues = true;
+      }
+      if (args.param && args.param.length > 0) {
+        adjustments.parameters = { ...(adjustments.parameters || {}), ...normalizeParams(args.param) };
+      }
+      const tuned = PHYS_MOD.tunePhysicsSpec(spec, adjustments);
+      const outPath = args.out || args.output;
+      if (outPath && typeof outPath === "string") {
+        const resolvedOut = path.resolve(outPath);
+        fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
+        fs.writeFileSync(resolvedOut, JSON.stringify(tuned.spec, null, 2), "utf8");
+      }
+      console.log(JSON.stringify(tuned, null, 2));
+      if (!tuned.validation.valid) process.exit(2);
+      return;
+    }
+
+    if (cmd === "build-physics") {
+      const specFile = args.spec || args.input;
+      const presetName = args.preset;
+      if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
+          (presetName !== undefined && (typeof presetName !== "string" || !presetName.trim())) ||
+          (!specFile && !presetName)) {
+        throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
+      }
+      if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
+      const spec = presetName
+        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+        : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const outPath = args.out || args.output || args._[1];
+      const className =
+        args.class ||
+        args["class-name"] ||
+        (outPath ? path.basename(outPath, ".java") : spec.className || "Comsol62PhysicsModel");
+      const compiled = PHYS_MOD.compilePhysicsSpecToJava(spec, { className });
+      if (compiled.status !== "COMPILED_PHYSICS_JAVA") {
+        console.log(JSON.stringify(compiled, null, 2));
+        process.exit(2);
+      }
+      let resolvedOut = null;
+      if (outPath) {
+        resolvedOut = path.resolve(outPath);
+        fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
+        fs.writeFileSync(resolvedOut, compiled.javaCode, "utf8");
+      }
+      console.log(
+        JSON.stringify(
+          {
+            status: compiled.status,
+            className: compiled.className,
+            outputFile: resolvedOut,
+            validation: compiled.validation,
+            javaCode: resolvedOut ? undefined : compiled.javaCode
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
+
+    if (cmd === "audit-physics") {
+      const sourceFile = args.source || args.input || args._[1];
+      if (typeof sourceFile !== "string" || !sourceFile.trim() || !fs.existsSync(sourceFile) || !fs.statSync(sourceFile).isFile()) {
+        throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
+      }
+      const code = fs.readFileSync(sourceFile, "utf8");
+      const res = PHYS_MOD.auditJavaPhysicsCode(code);
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.valid) process.exit(2);
+      return;
+    }
+
     if (cmd === "template") {
       const domain = args.domain || args._[1] || "heat-transfer";
       const tpl = TEMPLATES_MOD.getTemplate(domain);
@@ -946,7 +1059,7 @@ function main() {
     }
 
     throw new Error(
-      `Unknown command: ${cmd}. Supported: doctor, list-templates, template, list-geometry-presets, validate-geometry, build-geometry, audit-geometry, scaffold-java, validate-java, compile-java, run-batch, parse-log`
+      `Unknown command: ${cmd}. Supported: doctor, list-templates, template, list-geometry-presets, validate-geometry, build-geometry, audit-geometry, list-physics-presets, validate-physics, tune-physics, build-physics, audit-physics, scaffold-java, validate-java, compile-java, run-batch, parse-log`
     );
   } catch (err) {
     console.error(err.message);
@@ -971,5 +1084,6 @@ module.exports = {
   compileComsolJava,
   runComsolBatch,
   ...TEMPLATES_MOD,
-  ...GEOM_MOD
+  ...GEOM_MOD,
+  ...PHYS_MOD
 };
