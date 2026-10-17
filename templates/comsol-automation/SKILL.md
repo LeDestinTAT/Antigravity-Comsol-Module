@@ -1,19 +1,30 @@
 ---
 name: comsol-automation
-description: Automate COMSOL Multiphysics batch simulations, parameter sweeps, and solver log diagnostics (standalone or merged with Dual-Agent Codex Bridge).
+description: Automate COMSOL Multiphysics model generation (Java API & Python MPh), batch solving, and closed-loop auto-fix with the Dual-Agent Bridge.
 ---
 
-# COMSOL Multiphysics Automation (`~/.dual-agent/comsol.cjs`)
+# COMSOL Multiphysics Add-On (`~/.dual-agent/comsol.cjs`)
 
-- **Modes**:
-  - **Standalone**: Runs COMSOL batch jobs (`comsolbatch.exe`), parameter sweeps (`-pname`/`-plist`), `--dry-run` validation (when COMSOL is uninstalled), and structured solver log classification (`COMPLETED`, `MESH_ERROR`, `SOLVER_NONCONVERGENCE`, `PARAMETER_ERROR`).
-  - **Merged (`merged-dual-agent`)**: When installed alongside Dual-Agent Bridge (`~/.dual-agent/client.cjs`), passing `--auto-fix` on mesh/solver/parameter failures automatically delegates a compact (`<=800` char log excerpt) `FIX_REQUEST` to Codex.
+- **Architecture**: Attaches to `~/.dual-agent` as an add-on (`merged-dual-agent` when `client.cjs` is present, or `standalone` when installed alone).
+- **3 Execution Pipelines**:
+  1. **From-Scratch Model Generation (`Java API`)**: `scaffold-java` -> `validate-java` -> `compile-java` (`comsolcompile.exe`) -> `run-batch` (`comsolbatch.exe -inputfile Model.class -outputfile solved.mph`). Zero Python dependency required.
+  2. **Existing `.mph` Batch & Parameter Sweep**: `run-batch --input model.mph --param k=v ...`
+  3. **Python `MPh` Inspection & Expression Evaluation**: Use `template --domain mph-python` when Python `mph` is installed.
 
-## CLI Commands
+## Verified COMSOL Java API Rules (Anti-Hallucination)
 
-1. **Check Environment**: `node ~/.dual-agent/comsol.cjs doctor [--comsol-root <dir>]`
-   - Reports `installed`, `version`, `binaries.comsolbatch`, `readyMode` (`comsolbatch` | `dry-run-only`), and `dualAgentBridge.integrationMode` (`standalone` | `merged-dual-agent`).
-2. **Run Batch Simulation**:
-   `node ~/.dual-agent/comsol.cjs run-batch --input <model.mph> [--output <out.mph>] [--study <std1>] [--param key=val ...] [--batch-log <run.log>] [--dry-run] [--auto-fix] [--project <dir>]`
-   - Exits `0` on `COMPLETED` or `DRY_RUN`; exits `2` on `MESH_ERROR`, `SOLVER_NONCONVERGENCE`, `PARAMETER_ERROR`, or `UNKNOWN_ERROR`.
-3. **Parse Solver Log**: `node ~/.dual-agent/comsol.cjs parse-log --log <run.log>`
+- Always include `import com.comsol.model.*;` and `import com.comsol.model.util.*;` and initialize via `Model model = ModelUtil.create("Model");`.
+- Use `.create(tag, type)` (never `.add()`):
+  - Component & 3D Geom: `model.component().create("comp1", true); model.component("comp1").geom().create("geom1", 3);`
+  - Physics: `model.component("comp1").physics().create("ht", "HeatTransfer", "geom1");` (or `"LaminarFlow"`, `"SolidMechanics"`, `"Electrostatics"`).
+  - Mesh & Study: `model.component("comp1").mesh().create("mesh1"); model.study().create("std1"); model.study("std1").create("stat", "Stationary");`
+  - Vector properties (`size`, `FperArea`, `thermalconductivity`) require `new String[]{...}`; boundary selections require `.selection().set(new int[]{...})`.
+
+## CLI Commands (`node ~/.dual-agent/comsol.cjs`)
+
+1. `doctor [--check-python]`: Detects COMSOL binaries, Python `mph`, and Dual-Agent attachment state.
+2. `list-templates` | `template --domain <heat-transfer|fluid-flow|solid-mechanics|mph-python>`
+3. `scaffold-java --domain <domain> --out <Model.java> [--class <ClassName>]`
+4. `validate-java --source <Model.java>` | `compile-java --source <Model.java> [--auto-fix] [--project <dir>]`
+5. `run-batch --input <model.mph|Model.class> [--output <out.mph>] [--study <std1>] [--param k=v ...] [--batch-log <run.log>] [--dry-run] [--auto-fix] [--project <dir>]`
+6. `parse-log --log <run.log>`: Classifies `COMPLETED`, `GEOMETRY_ERROR`, `MESH_ERROR`, `PARAMETER_ERROR`, `SOLVER_NONCONVERGENCE` with domain remediation hints.

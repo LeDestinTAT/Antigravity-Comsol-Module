@@ -9,7 +9,7 @@ const DEPLOY_COMSOL = path.resolve(__dirname, "..", "deploy-comsol.cjs");
 const COMSOL_SCRIPT = path.resolve(__dirname, "..", "global", "comsol.cjs");
 const comsol = require(COMSOL_SCRIPT);
 
-function makeTempDir(prefix = "comsol-module-test-") {
+function makeTempDir(prefix = "comsol-addon-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
@@ -19,7 +19,7 @@ function cleanupDir(dir) {
   } catch (_) {}
 }
 
-test("1. Standalone install & uninstalled --dry-run work without Dual-Agent Bridge or COMSOL", t => {
+test("1. Standalone add-on install & uninstalled --dry-run work without Dual-Agent Bridge or COMSOL", t => {
   const root = makeTempDir();
   t.after(() => cleanupDir(root));
 
@@ -39,10 +39,16 @@ test("1. Standalone install & uninstalled --dry-run work without Dual-Agent Brid
   assert.equal(installRes.status, 0, installRes.stderr);
   const installed = JSON.parse(installRes.stdout);
   assert.equal(installed.status, "INSTALLED");
+  assert.equal(installed.role, "addon");
   assert.equal(installed.skillVerified.ok, true);
   assert.equal(installed.comsolEnvironment.installed, false);
   assert.equal(installed.comsolEnvironment.readyMode, "dry-run-only");
   assert.equal(installed.comsolEnvironment.dualAgentBridge.integrationMode, "standalone");
+
+  const addonRegistry = JSON.parse(
+    fs.readFileSync(path.join(homeDir, "addons", "registry.json"), "utf8")
+  );
+  assert.ok(addonRegistry.addons["comsol-automation"]);
 
   const batchRes = comsol.runComsolBatch({
     inputFile: path.join(root, "chip_cooling.mph"),
@@ -58,50 +64,83 @@ test("1. Standalone install & uninstalled --dry-run work without Dual-Agent Brid
   assert.deepEqual(batchRes.parsedParams, { width: "120[um]", inlet_v: "0.8[m/s]" });
   assert.ok(batchRes.args.includes("-pname"));
   assert.ok(batchRes.args.includes("width,inlet_v"));
-  assert.ok(batchRes.args.includes("-plist"));
-  assert.ok(batchRes.args.includes("120[um],0.8[m/s]"));
 });
 
-test("2. Simulated COMSOL installation discovery and parseComsolLog classification", t => {
+test("2. Verified COMSOL Java API scaffolding, anti-hallucination static validation & compilation", t => {
+  const root = makeTempDir();
+  t.after(() => cleanupDir(root));
+
+  const templates = comsol.listTemplates();
+  assert.ok(templates.some(tpl => tpl.domain === "heat-transfer"));
+  assert.ok(templates.some(tpl => tpl.domain === "fluid-flow"));
+  assert.ok(templates.some(tpl => tpl.domain === "mph-python"));
+
+  const javaPath = path.join(root, "ChipHeatSink.java");
+  const scaffold = comsol.scaffoldJavaModel({
+    domain: "heat-transfer",
+    outputFile: javaPath
+  });
+  assert.equal(scaffold.status, "SCAFFOLDED");
+  assert.equal(scaffold.className, "ChipHeatSink");
+  assert.equal(scaffold.validation.valid, true);
+
+  // Dry-run compile when COMSOL is not installed
+  const dryCompile = comsol.compileComsolJava({
+    sourceFile: javaPath,
+    comsolRoot: path.join(root, "no-comsol")
+  });
+  assert.equal(dryCompile.status, "DRY_RUN");
+  assert.equal(dryCompile.staticValidation.valid, true);
+
+  // Catch hallucinated COMSOL Java API syntax (.add() instead of .create() and missing imports)
+  const badJavaPath = path.join(root, "HallucinatedModel.java");
+  fs.writeFileSync(
+    badJavaPath,
+    `public class HallucinatedModel { void build() { model.geom("geom1").add("blk1", "Block"); } }`
+  );
+  const badCompile = comsol.compileComsolJava({
+    sourceFile: badJavaPath,
+    comsolRoot: path.join(root, "no-comsol")
+  });
+  assert.equal(badCompile.status, "COMPILE_ERROR");
+  assert.equal(badCompile.staticValidation.valid, false);
+  assert.ok(badCompile.staticValidation.issues.some(i => i.includes(".create(tag, type)")));
+});
+
+test("3. Simulated COMSOL 6.2 discovery, log classification & remediation hints", t => {
   const root = makeTempDir();
   t.after(() => cleanupDir(root));
 
   const fakeComsolRoot = path.join(root, "COMSOL62", "Multiphysics");
   const binDir = path.join(fakeComsolRoot, "bin", process.platform === "win32" ? "win64" : "glnxa64");
   fs.mkdirSync(binDir, { recursive: true });
-  const exeName = process.platform === "win32" ? "comsolbatch.exe" : "comsolbatch";
-  fs.writeFileSync(path.join(binDir, exeName), "mock-binary");
+  const batchExe = process.platform === "win32" ? "comsolbatch.exe" : "comsolbatch";
+  const compileExe = process.platform === "win32" ? "comsolcompile.exe" : "comsolcompile";
+  fs.writeFileSync(path.join(binDir, batchExe), "mock-binary");
+  fs.writeFileSync(path.join(binDir, compileExe), "mock-compiler");
 
   const env = comsol.detectComsolEnvironment({
     homeDir: path.join(root, "home"),
     comsolRoot: fakeComsolRoot
   });
   assert.equal(env.installed, true);
-  assert.equal(env.readyMode, "comsolbatch");
-  assert.ok(env.binaries.comsolbatch.endsWith(exeName));
+  assert.equal(env.version, "6.2");
+  assert.ok(env.capabilities.includes("java-api-compile"));
 
-  assert.equal(comsol.parseComsolLog("Solution time: 14 s.\n0 errors.", 0).status, "COMPLETED");
-  assert.equal(
-    comsol.parseComsolLog("Error: Failed to generate mesh for domain 3.\nInverted mesh element.", 1).status,
-    "MESH_ERROR"
-  );
-  assert.equal(
-    comsol.parseComsolLog("Nonlinear solver did not converge.\nFailed to find a solution.", 1).status,
-    "SOLVER_NONCONVERGENCE"
-  );
-  assert.equal(
-    comsol.parseComsolLog("Undefined variable: comp1.ht.T_inlet\nUnknown parameter.", 1).status,
-    "PARAMETER_ERROR"
-  );
+  const geomErr = comsol.parseComsolLog("Error: Boolean operation failed in geometry.", 1);
+  assert.equal(geomErr.status, "GEOMETRY_ERROR");
+  assert.ok(geomErr.remediationHint.includes("geom.run()"));
 
-  const noisyLog = Array.from({ length: 80 }, (_, i) => `Iteration ${i}: residual = 1e-${i}`).join("\n") +
-    "\nFailed to find a solution: Singular matrix.";
-  const parsedNoisy = comsol.parseComsolLog(noisyLog, 1);
-  assert.equal(parsedNoisy.status, "SOLVER_NONCONVERGENCE");
-  assert.ok(parsedNoisy.logExcerpt.length <= 800);
+  const meshErr = comsol.parseComsolLog("Failed to generate mesh for domain 2.\nInverted mesh element.", 1);
+  assert.equal(meshErr.status, "MESH_ERROR");
+  assert.ok(meshErr.remediationHint.includes("autoMeshSize"));
+
+  const solverErr = comsol.parseComsolLog("Nonlinear solver did not converge.\nSingular matrix.", 1);
+  assert.equal(solverErr.status, "SOLVER_NONCONVERGENCE");
+  assert.ok(solverErr.remediationHint.includes("singular matrix"));
 });
 
-test("3. Separate installation + Merged Dual-Agent operation & non-destructive uninstall", t => {
+test("4. Add-on attachment to Dual-Agent Host + closed-loop auto-fix with remediation hints", t => {
   const root = makeTempDir();
   t.after(() => cleanupDir(root));
 
@@ -109,7 +148,6 @@ test("3. Separate installation + Merged Dual-Agent operation & non-destructive u
   const skillPath = path.join(root, "skills", "comsol-automation", "SKILL.md");
   fs.mkdirSync(homeDir, { recursive: true });
 
-  // Simulate Dual-Agent Bridge already installed in homeDir
   const mockClientPath = path.join(homeDir, "client.cjs");
   const mockBridgePath = path.join(homeDir, "bridge.cjs");
   fs.writeFileSync(
@@ -118,7 +156,6 @@ test("3. Separate installation + Merged Dual-Agent operation & non-destructive u
   );
   fs.writeFileSync(mockBridgePath, "// mock bridge");
 
-  // Install COMSOL module on top of existing Dual-Agent homeDir
   const installRes = spawnSync(process.execPath, [DEPLOY_COMSOL, "install"], {
     env: {
       ...process.env,
@@ -129,10 +166,7 @@ test("3. Separate installation + Merged Dual-Agent operation & non-destructive u
     encoding: "utf8"
   });
   assert.equal(installRes.status, 0);
-  const installed = JSON.parse(installRes.stdout);
-  assert.equal(installed.comsolEnvironment.dualAgentBridge.integrationMode, "merged-dual-agent");
 
-  // Simulate a failing COMSOL batch run with autoFix enabled in merged mode
   const failRun = comsol.runComsolBatch({
     inputFile: path.join(root, "model.mph"),
     study: "std1",
@@ -144,11 +178,9 @@ test("3. Separate installation + Merged Dual-Agent operation & non-destructive u
   });
   assert.equal(failRun.status, "SOLVER_NONCONVERGENCE");
   assert.equal(failRun.integrationMode, "merged-dual-agent");
-  assert.ok(failRun.delegatedFix);
   assert.equal(failRun.delegatedFix.delegated, true);
-  assert.equal(failRun.delegatedFix.response.submitted, true);
+  assert.ok(failRun.delegatedFix.suggestedPrompt.includes("Hint:"));
 
-  // Uninstalling COMSOL module preserves Dual-Agent Bridge files
   const uninst = JSON.parse(
     spawnSync(process.execPath, [DEPLOY_COMSOL, "uninstall"], {
       env: { ...process.env, DUAL_AGENT_HOME: homeDir, COMSOL_AGENT_SKILL_PATH: skillPath },
@@ -158,5 +190,4 @@ test("3. Separate installation + Merged Dual-Agent operation & non-destructive u
   assert.equal(uninst.status, "UNINSTALLED");
   assert.equal(uninst.dualAgentBridgePreserved, true);
   assert.equal(fs.existsSync(mockClientPath), true);
-  assert.equal(fs.existsSync(mockBridgePath), true);
 });

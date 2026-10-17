@@ -47,17 +47,37 @@ function loadSkillTemplate() {
   throw new Error(`COMSOL skill template not found at ${candidate}`);
 }
 
+function updateAddonsRegistry(homeDir, addonEntry, remove = false) {
+  const addonsDir = path.join(homeDir, "addons");
+  fs.mkdirSync(addonsDir, { recursive: true });
+  const registryPath = path.join(addonsDir, "registry.json");
+  let current = { addons: {} };
+  if (fs.existsSync(registryPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+      if (parsed && typeof parsed === "object" && parsed.addons) {
+        current = parsed;
+      }
+    } catch (_) {}
+  }
+  if (remove) {
+    delete current.addons["comsol-automation"];
+  } else {
+    current.addons["comsol-automation"] = addonEntry;
+  }
+  fs.writeFileSync(registryPath, JSON.stringify(current, null, 2), "utf8");
+  return registryPath;
+}
+
 function installComsolModule(options = {}) {
   const homeDir = getHomeDir();
   const skillPath = getComsolSkillPath();
   const modulesDir = path.join(homeDir, "modules");
 
-  for (const dir of [homeDir, modulesDir, path.join(homeDir, "logs")]) {
+  for (const dir of [homeDir, modulesDir, path.join(homeDir, "addons"), path.join(homeDir, "logs")]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // If merged in the same directory with Dual-Agent deploy.cjs and --install-merged-core is set,
-  // or if Dual-Agent files are present in global/ but not yet in homeDir, optionally install core too.
   const siblingCoreDeploy = path.join(MODULE_ROOT, "deploy.cjs");
   let mergedCoreInstall = null;
   if (options.withCore && fs.existsSync(siblingCoreDeploy)) {
@@ -74,8 +94,11 @@ function installComsolModule(options = {}) {
   }
 
   const srcComsol = path.join(MODULE_ROOT, "global", "comsol.cjs");
+  const srcTemplates = path.join(MODULE_ROOT, "global", "comsol-templates.cjs");
   const destComsol = path.join(homeDir, "comsol.cjs");
+  const destTemplates = path.join(homeDir, "comsol-templates.cjs");
   fs.copyFileSync(srcComsol, destComsol);
+  fs.copyFileSync(srcTemplates, destTemplates);
 
   const skillText = loadSkillTemplate();
   writeUtf8NoBomSync(skillPath, skillText);
@@ -92,24 +115,31 @@ function installComsolModule(options = {}) {
   const manifestPath = path.join(modulesDir, "comsol.json");
   const manifest = {
     module: "comsol-automation",
-    version: "0.1.0-alpha",
+    role: "addon",
+    version: "0.2.0-alpha",
     installedAt: new Date().toISOString(),
     runtimePath: destComsol,
+    templatesPath: destTemplates,
     skillPath,
     comsolInstalled: envCheck.installed,
     comsolRoot: envCheck.comsolRoot,
     comsolVersion: envCheck.version,
+    capabilities: envCheck.capabilities,
     integrationMode: envCheck.dualAgentBridge.integrationMode
   };
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const addonsRegistryPath = updateAddonsRegistry(homeDir, manifest, false);
 
   return {
     status: "INSTALLED",
     module: "comsol-automation",
+    role: "addon",
     homeDir,
     deployedFiles: {
       comsolRuntime: destComsol,
+      comsolTemplates: destTemplates,
       moduleManifest: manifestPath,
+      addonsRegistry: addonsRegistryPath,
       comsolSkill: skillPath
     },
     skillVerified: skillCheck,
@@ -122,10 +152,11 @@ function uninstallComsolModule() {
   const homeDir = getHomeDir();
   const skillPath = getComsolSkillPath();
   const destComsol = path.join(homeDir, "comsol.cjs");
+  const destTemplates = path.join(homeDir, "comsol-templates.cjs");
   const manifestPath = path.join(homeDir, "modules", "comsol.json");
 
   const removed = [];
-  for (const target of [destComsol, manifestPath, skillPath]) {
+  for (const target of [destComsol, destTemplates, manifestPath, skillPath]) {
     if (fs.existsSync(target)) {
       try {
         fs.unlinkSync(target);
@@ -133,8 +164,8 @@ function uninstallComsolModule() {
       } catch (_) {}
     }
   }
+  updateAddonsRegistry(homeDir, null, true);
 
-  // Note: ~/.dual-agent/bridge.cjs, client.cjs, and projects.json are strictly preserved
   return {
     status: "UNINSTALLED",
     module: "comsol-automation",
@@ -148,9 +179,11 @@ function runDoctor(options = {}) {
   const homeDir = getHomeDir();
   const skillPath = getComsolSkillPath();
   const runtimePath = path.join(homeDir, "comsol.cjs");
+  const templatesPath = path.join(homeDir, "comsol-templates.cjs");
   const manifestPath = path.join(homeDir, "modules", "comsol.json");
 
   const runtimeExists = fs.existsSync(runtimePath);
+  const templatesExists = fs.existsSync(templatesPath);
   const manifestExists = fs.existsSync(manifestPath);
   const skillVerify = verifySkillNoBom(skillPath);
   const envCheck = COMSOL_RUNTIME.detectComsolEnvironment({
@@ -158,12 +191,14 @@ function runDoctor(options = {}) {
     comsolRoot: options.comsolRoot
   });
 
-  const healthy = runtimeExists && manifestExists && skillVerify.ok;
+  const healthy = runtimeExists && templatesExists && manifestExists && skillVerify.ok;
   return {
     healthy,
     module: "comsol-automation",
+    role: "addon",
     files: {
       runtimeExists,
+      templatesExists,
       manifestExists,
       skillVerify
     },
@@ -220,7 +255,7 @@ function main() {
       return;
     }
 
-    // Forward COMSOL runtime commands (run-batch, parse-log) directly to global/comsol.cjs
+    // Forward COMSOL runtime commands directly to comsol.cjs
     const targetRuntime = fs.existsSync(path.join(getHomeDir(), "comsol.cjs"))
       ? path.join(getHomeDir(), "comsol.cjs")
       : path.join(MODULE_ROOT, "global", "comsol.cjs");

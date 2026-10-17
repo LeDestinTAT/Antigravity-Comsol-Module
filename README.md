@@ -1,59 +1,45 @@
-# Antigravity COMSOL Automation Module (WIP / Private)
+# Antigravity COMSOL Add-On Module (Private / WIP)
 
-独立的 COMSOL Multiphysics 批处理与日志诊断模块。设计为**可独立安装运行**，也可与 [`Antigravity-Codex-Workspace`](https://github.com/LeDestinTAT/Antigravity-Codex-Workspace) **合并安装并联动运行**（无文件命名冲突）。
+面向 [`Antigravity-Codex-Workspace`](https://github.com/LeDestinTAT/Antigravity-Codex-Workspace) 的 **COMSOL Multiphysics 自动化附加模块（Add-On）**。
 
-## 目录结构（零冲突设计）
+参考开源社区成熟方案（`COMSOL_Multiphysics_MCP`、`mph-agent`、`2p1c/comsol-skills` 与 `MPh`），本模块不仅支持对已有 `.mph` 文件的参数扫描与批处理求解，还内置了**防幻觉 COMSOL Java API 模板库**、**编译前静态语法校验**、**`comsolcompile` 从零建模流水线**、**Python `MPh` 表达式求值模板**以及**领域级报错修复提示（Remediation Hints）**。
 
-```text
-├── deploy-comsol.cjs                   # COMSOL 模块独立安装与诊断入口（不与核心 deploy.cjs 冲突）
-├── global/
-│   └── comsol.cjs                      # COMSOL 批处理驱动与日志解析核心（部署至 ~/.dual-agent/comsol.cjs）
-├── templates/
-│   └── comsol-automation/
-│       └── SKILL.md                    # 独立技能文件（部署至 ~/.gemini/config/skills/comsol-automation/SKILL.md）
-└── test/
-    └── comsol-module.test.cjs          # 独立安装、合并联动与日志解析测试套件
-```
+## 核心特性
 
-## 安装方式
+1. **插件式附加架构（Add-On & Standalone 双模）**
+   - **附加模式（`merged-dual-agent`）**：挂载至主框架 `~/.dual-agent/addons/registry.json` 与 `~/.dual-agent/comsol.cjs`。当编译或求解失败时，传入 `--auto-fix` 会自动携带精简日志（`<= 800` 字符）与物理场修复提示（`Hint`）调用 `~/.dual-agent/client.cjs` 交由 Codex 闭环修复。
+   - **独立模式（`standalone`）**：在未安装主桥接器的电脑上亦可单独安装并完成建模编译、批处理与日志诊断。
+2. **三条全周期执行流水线**
+   - **Java API 从零建模（零 Python 依赖）**：`scaffold-java` 生成标准模板 -> `validate-java` 静态拦截 `.add()` 等常见大模型 API 幻觉 -> `compile-java` 调用 `comsolcompile.exe` 编译为 `.class` -> `run-batch` 生成并求解 `.mph` 并导出 CSV 数据。
+   - **已有 `.mph` 批处理与参数扫描**：`run-batch --input model.mph --param k=v ...`
+   - **Python `MPh` 模型树检索与后处理求值**：通过 `template --domain mph-python` 导出标准 `mph` 脚本，支持读取模型树与 `model.evaluate()` 数值提取。
 
-### 方式一：仅独立安装本模块（无需安装双智能体桥接器）
+## 安装与挂载
 
 ```powershell
+# 1. 作为附加模块挂载到当前环境的 ~/.dual-agent（或独立安装）
 node deploy-comsol.cjs install
+
+# 2. 如果将本模块文件直接复制合并到 Antigravity-Codex-Workspace 目录下，可一键安装主体+附加模块
+node deploy-comsol.cjs install --with-core
+
+# 3. 环境与挂载状态自检
 node deploy-comsol.cjs doctor
 ```
 
-- 自动检测本机 COMSOL 安装路径（支持环境变量 `COMSOL_ROOT` 或 `C:\Program Files\COMSOL\COMSOL*`、`D:\Program Files\COMSOL\COMSOL*` 等默认路径）。
-- 若当前机器尚未安装 COMSOL，自动进入 `dry-run-only` 调试模式。
-
-### 方式二：与 `Antigravity-Codex-Workspace` 合并运行
-
-无论是**分别在两个目录先后执行安装**，还是**将本仓库文件直接合并复制到 `Antigravity-Codex-Workspace` 目录中**：
+## 常用 CLI 命令
 
 ```powershell
-# 若已合并至同一目录，可一键同时安装核心桥接器与 COMSOL 模块：
-node deploy-comsol.cjs install --with-core
+# 查看内置的防幻觉物理场模板（heat-transfer / fluid-flow / solid-mechanics / mph-python）
+node ~/.dual-agent/comsol.cjs list-templates
 
-# 或先后独立安装（顺序任意，互不覆盖）：
-node deploy.cjs install
-node deploy-comsol.cjs install
-```
+# 从零生成 3D 传热 Java 建模源码并执行静态校验与编译
+node ~/.dual-agent/comsol.cjs scaffold-java --domain heat-transfer --out HeatSink.java
+node ~/.dual-agent/comsol.cjs compile-java --source HeatSink.java --auto-fix
 
-合并后，`comsol.cjs doctor` 会自动识别 `integrationMode: "merged-dual-agent"`。当仿真出现网格错误（`MESH_ERROR`）、求解器不收敛（`SOLVER_NONCONVERGENCE`）或参数错误（`PARAMETER_ERROR`）时，传入 `--auto-fix` 即可自动将精简后的错误日志片段（`<= 800` 字符）通过 `~/.dual-agent/client.cjs` 派发给 Codex 进行修复。
+# 运行批处理求解（支持 .mph 或编译后的 .class），失败时自动触发 Codex 修复
+node ~/.dual-agent/comsol.cjs run-batch --input HeatSink.class --output HeatSink_solved.mph --auto-fix
 
-## 常用命令
-
-```powershell
-# 1. 环境与合并状态自检
-node ~/.dual-agent/comsol.cjs doctor
-
-# 2. 执行批处理仿真（未安装 COMSOL 时自动或通过 --dry-run 预览参数）
-node ~/.dual-agent/comsol.cjs run-batch --input model.mph --output out.mph --study std1 --param width=120[um] --param vel=0.8[m/s]
-
-# 3. 批处理失败时自动联动 Codex 修复（合并模式下生效）
-node ~/.dual-agent/comsol.cjs run-batch --input model.mph --study std1 --auto-fix --project .
-
-# 4. 单独解析 COMSOL 日志文件
+# 单独解析 COMSOL 求解器日志并获取修复建议
 node ~/.dual-agent/comsol.cjs parse-log --log batch.log
 ```
