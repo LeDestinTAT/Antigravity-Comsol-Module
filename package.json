@@ -1,0 +1,18 @@
+{
+  "name": "antigravity-comsol-module",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "description": "Standalone and Dual-Agent compatible COMSOL Multiphysics batch automation module.",
+  "main": "global/comsol.cjs",
+  "bin": {
+    "comsol-agent": "deploy-comsol.cjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/comsol-module.test.cjs",
+    "install:module": "node deploy-comsol.cjs install",
+    "doctor": "node deploy-comsol.cjs doctor"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
