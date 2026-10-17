@@ -761,6 +761,51 @@ function parseCliArgs(argv) {
   return args;
 }
 
+function listModelPresets() {
+  return {
+    geometryPresets: GEOM_MOD.listGeometryPresets(),
+    physicsPresets: PHYS_MOD.listPhysicsPresets()
+  };
+}
+
+function getModelPreset(name) {
+  const key = String(name || "").toLowerCase().trim();
+  if (Object.prototype.hasOwnProperty.call(PHYS_MOD.PHYSICS_PRESETS, key)) {
+    return { kind: "physics", ...PHYS_MOD.getPhysicsPreset(key) };
+  }
+  if (Object.prototype.hasOwnProperty.call(GEOM_MOD.GEOMETRY_PRESETS, key)) {
+    return { kind: "geometry", ...GEOM_MOD.getGeometryPreset(key) };
+  }
+  throw new Error(
+    `Unknown model preset '${name}'. Available: ${[
+      ...Object.keys(PHYS_MOD.PHYSICS_PRESETS),
+      ...Object.keys(GEOM_MOD.GEOMETRY_PRESETS)
+    ].join(", ")}`
+  );
+}
+
+function validateModelSpec(spec = {}) {
+  if (spec && Array.isArray(spec.physics) && spec.physics.length > 0) {
+    return PHYS_MOD.validatePhysicsSpec(spec);
+  }
+  return GEOM_MOD.validateGeometrySpec(spec && spec.geometry ? spec.geometry : spec);
+}
+
+function tuneModelSpec(spec = {}, adjustments = {}) {
+  return PHYS_MOD.tunePhysicsSpec(spec, adjustments);
+}
+
+function compileModelSpecToJava(spec = {}, options = {}) {
+  if (spec && Array.isArray(spec.physics) && spec.physics.length > 0) {
+    return PHYS_MOD.compilePhysicsSpecToJava(spec, options);
+  }
+  return GEOM_MOD.compileGeometrySpecToJava(spec && spec.geometry ? spec.geometry : spec, options);
+}
+
+function auditJavaModelCode(sourceCode, expectedClassName) {
+  return TEMPLATES_MOD.validateJavaModelSource(sourceCode, expectedClassName);
+}
+
 function main() {
   const args = parseCliArgs(process.argv.slice(2));
   const cmd = args._[0] || "doctor";
@@ -778,6 +823,11 @@ function main() {
 
     if (cmd === "list-templates") {
       console.log(JSON.stringify(TEMPLATES_MOD.listTemplates(), null, 2));
+      return;
+    }
+
+    if (cmd === "list-presets") {
+      console.log(JSON.stringify(listModelPresets(), null, 2));
       return;
     }
 
@@ -813,9 +863,6 @@ function main() {
         throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
       }
       if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
-      if (!specFile && !presetName) {
-        throw new Error("build-geometry requires --spec <spec.json> or --preset <name>");
-      }
       const spec = presetName
         ? GEOM_MOD.getGeometryPreset(presetName).spec
         : JSON.parse(fs.readFileSync(specFile, "utf8"));
@@ -868,7 +915,7 @@ function main() {
       return;
     }
 
-    if (cmd === "validate-physics") {
+    if (cmd === "validate-physics" || cmd === "validate-model") {
       const specFile = args.spec || args.input || args._[1];
       const presetName = args.preset;
       if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
@@ -878,15 +925,15 @@ function main() {
       }
       if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
       const spec = presetName
-        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+        ? (cmd === "validate-model" ? getModelPreset(presetName).spec : PHYS_MOD.getPhysicsPreset(presetName).spec)
         : JSON.parse(fs.readFileSync(specFile, "utf8"));
-      const res = PHYS_MOD.validatePhysicsSpec(spec);
+      const res = cmd === "validate-model" ? validateModelSpec(spec) : PHYS_MOD.validatePhysicsSpec(spec);
       console.log(JSON.stringify(res, null, 2));
       if (!res.valid) process.exit(2);
       return;
     }
 
-    if (cmd === "tune-physics") {
+    if (cmd === "tune-physics" || cmd === "tune-model") {
       const specFile = args.spec || args.input;
       const presetName = args.preset;
       if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
@@ -896,10 +943,11 @@ function main() {
       }
       if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
       const spec = presetName
-        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+        ? (cmd === "tune-model" ? getModelPreset(presetName).spec : PHYS_MOD.getPhysicsPreset(presetName).spec)
         : JSON.parse(fs.readFileSync(specFile, "utf8"));
-      const adjustments = args.adjustments
-        ? JSON.parse(fs.readFileSync(args.adjustments, "utf8"))
+      const patchFile = args.patch || args.adjustments;
+      const adjustments = patchFile && typeof patchFile === "string"
+        ? JSON.parse(fs.readFileSync(patchFile, "utf8"))
         : {};
       if (args["auto-align-init"]) {
         adjustments.autoAlignInitialValues = true;
@@ -919,7 +967,7 @@ function main() {
       return;
     }
 
-    if (cmd === "build-physics") {
+    if (cmd === "build-physics" || cmd === "build-model") {
       const specFile = args.spec || args.input;
       const presetName = args.preset;
       if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
@@ -928,16 +976,24 @@ function main() {
         throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
       }
       if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
-      const spec = presetName
-        ? PHYS_MOD.getPhysicsPreset(presetName).spec
+      let spec = presetName
+        ? (cmd === "build-model" ? getModelPreset(presetName).spec : PHYS_MOD.getPhysicsPreset(presetName).spec)
         : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const patchFile = args.patch || args.adjustments;
+      if (patchFile && typeof patchFile === "string") {
+        const patchObj = JSON.parse(fs.readFileSync(patchFile, "utf8"));
+        spec = PHYS_MOD.tunePhysicsSpec(spec, patchObj).spec;
+      }
       const outPath = args.out || args.output || args._[1];
       const className =
         args.class ||
         args["class-name"] ||
         (outPath ? path.basename(outPath, ".java") : spec.className || "Comsol62PhysicsModel");
-      const compiled = PHYS_MOD.compilePhysicsSpecToJava(spec, { className });
-      if (compiled.status !== "COMPILED_PHYSICS_JAVA") {
+      const compiled =
+        cmd === "build-model"
+          ? compileModelSpecToJava(spec, { className })
+          : PHYS_MOD.compilePhysicsSpecToJava(spec, { className });
+      if (!compiled.javaCode) {
         console.log(JSON.stringify(compiled, null, 2));
         process.exit(2);
       }
@@ -992,7 +1048,7 @@ function main() {
       return;
     }
 
-    if (cmd === "validate-java") {
+    if (cmd === "validate-java" || cmd === "audit-model") {
       const sourceFile = args.source || args.input || args._[1];
       if (typeof sourceFile !== "string" || !sourceFile.trim() || !fs.existsSync(sourceFile) || !fs.statSync(sourceFile).isFile()) {
         throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
@@ -1059,7 +1115,7 @@ function main() {
     }
 
     throw new Error(
-      `Unknown command: ${cmd}. Supported: doctor, list-templates, template, list-geometry-presets, validate-geometry, build-geometry, audit-geometry, list-physics-presets, validate-physics, tune-physics, build-physics, audit-physics, scaffold-java, validate-java, compile-java, run-batch, parse-log`
+      `Unknown command: ${cmd}. Supported: doctor, list-presets, validate-model, tune-model, build-model, audit-model, list-templates, template, list-geometry-presets, validate-geometry, build-geometry, audit-geometry, list-physics-presets, validate-physics, tune-physics, build-physics, audit-physics, scaffold-java, validate-java, compile-java, run-batch, parse-log`
     );
   } catch (err) {
     console.error(err.message);
@@ -1083,6 +1139,17 @@ module.exports = {
   scaffoldJavaModel,
   compileComsolJava,
   runComsolBatch,
+  listModelPresets,
+  getModelPreset,
+  validateModelSpec,
+  tuneModelSpec,
+  compileModelSpecToJava,
+  auditJavaModelCode,
+  submodules: {
+    geometry: GEOM_MOD,
+    physics: PHYS_MOD,
+    templates: TEMPLATES_MOD
+  },
   ...TEMPLATES_MOD,
   ...GEOM_MOD,
   ...PHYS_MOD

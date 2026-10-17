@@ -573,17 +573,8 @@ function buildFaceBoxBounds(aabb, face, tol = 1e-6) {
   throw new Error(`Unsupported FaceBox face '${face}' (expected xmin|xmax|ymin|ymax|zmin|zmax|bottom|top|left|right)`);
 }
 
-function compileGeometrySpecToJava(spec = {}, options = {}) {
-  const validation = validateGeometrySpec(spec);
-  if (!validation.valid) {
-    return {
-      status: "INVALID_GEOMETRY_SPEC",
-      validation,
-      javaCode: null
-    };
-  }
-
-  const className = options.className || spec.className || "Comsol62GeometryModel";
+function buildGeometryMethodLines(spec = {}, validation = null) {
+  const val = validation || validateGeometrySpec(spec);
   const compTag = spec.componentTag || "comp1";
   const geomTag = spec.geomTag || "geom1";
   const dim = spec.dimension ?? 3;
@@ -591,13 +582,7 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
   const features = spec.features || [];
   const selections = spec.selections || [];
 
-  const lines = [
-    `import com.comsol.model.*;`,
-    `import com.comsol.model.util.*;`,
-    ``,
-    `public class ${className} {`,
-    `  public static Model buildGeometry(Model model) {`
-  ];
+  const lines = [`  public static Model buildGeometry(Model model) {`];
 
   for (const [k, v] of Object.entries(params)) {
     lines.push(`    model.param().set(${JSON.stringify(k)}, ${JSON.stringify(String(v))});`);
@@ -613,7 +598,9 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
 
   for (const feat of features) {
     const t = JSON.stringify(feat.tag);
-    lines.push(`    geom.create(${t}, ${JSON.stringify(dim === 3 && ["Fillet", "Chamfer"].includes(feat.type) ? feat.type + "3D" : feat.type)});`);
+    lines.push(
+      `    geom.create(${t}, ${JSON.stringify(dim === 3 && ["Fillet", "Chamfer"].includes(feat.type) ? feat.type + "3D" : feat.type)});`
+    );
     if (feat.label) {
       lines.push(`    geom.feature(${t}).label(${JSON.stringify(feat.label)});`);
     }
@@ -704,8 +691,15 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
       }
     } else if (feat.type === "Revolve") {
       lines.push(`    geom.feature(${t}).selection("input").set(${formatJavaStringArray(inputTags(feat.input))});`);
-      for (const [key, value] of Object.entries({ angle1: feat.angle1 ?? 0, angle2: feat.angle2 ?? feat.angle ?? 360, axis: feat.axis || [0, 0, 1], pos: feat.pos || [0, 0, 0] })) {
-        lines.push(`    geom.feature(${t}).set(${JSON.stringify(key)}, ${Array.isArray(value) ? formatJavaStringArray(value) : JSON.stringify(String(value))});`);
+      for (const [key, value] of Object.entries({
+        angle1: feat.angle1 ?? 0,
+        angle2: feat.angle2 ?? feat.angle ?? 360,
+        axis: feat.axis || [0, 0, 1],
+        pos: feat.pos || [0, 0, 0]
+      })) {
+        lines.push(
+          `    geom.feature(${t}).set(${JSON.stringify(key)}, ${Array.isArray(value) ? formatJavaStringArray(value) : JSON.stringify(String(value))});`
+        );
       }
     } else if (["Fillet", "Fillet3D", "Chamfer", "Chamfer3D"].includes(feat.type)) {
       const entities = feat.entities || feat.edges;
@@ -715,7 +709,9 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
       const objects = inputTags(feat.input);
       if (!objects.length) throw new Error(`${feat.type} '${feat.tag}' requires input object tags`);
       for (const object of objects) {
-        lines.push(`    geom.feature(${t}).selection("input").set(${JSON.stringify(object)}, new int[]{${entities.join(", ")}});`);
+        lines.push(
+          `    geom.feature(${t}).selection("input").set(${JSON.stringify(object)}, new int[]{${entities.join(", ")}});`
+        );
       }
       const key = feat.type.startsWith("Fillet") ? "radius" : "distance";
       const value = feat[key] ?? feat.r;
@@ -762,14 +758,16 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
       lines.push(`    ${prefix}.set("condition", ${JSON.stringify(sel.condition || "intersects")});`);
       for (const key of ["pos", "axis", "r", "top", "bottom"]) {
         if (sel[key] !== undefined) {
-          lines.push(`    ${prefix}.set(${JSON.stringify(key)}, ${Array.isArray(sel[key]) ? formatJavaStringArray(sel[key]) : JSON.stringify(String(sel[key]))});`);
+          lines.push(
+            `    ${prefix}.set(${JSON.stringify(key)}, ${Array.isArray(sel[key]) ? formatJavaStringArray(sel[key]) : JSON.stringify(String(sel[key]))});`
+          );
         }
       }
       continue;
     }
     let box = sel.box;
     if (sel.type === "FaceBox") {
-      const featBounds = validation.boundsByTag[sel.feature];
+      const featBounds = val.boundsByTag[sel.feature];
       box = buildFaceBoxBounds(featBounds, sel.face, sel.tol ?? 1e-6);
     }
     if (box) {
@@ -778,7 +776,9 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
         lines.push(`    model.component(${JSON.stringify(compTag)}).selection(${st}).label(${JSON.stringify(sel.label)});`);
       }
       lines.push(`    model.component(${JSON.stringify(compTag)}).selection(${st}).set("entitydim", ${entityDim});`);
-      lines.push(`    model.component(${JSON.stringify(compTag)}).selection(${st}).set("condition", ${JSON.stringify(sel.condition || "allvertices")});`);
+      lines.push(
+        `    model.component(${JSON.stringify(compTag)}).selection(${st}).set("condition", ${JSON.stringify(sel.condition || "allvertices")});`
+      );
       for (const key of ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"]) {
         if (box[key] !== undefined) {
           lines.push(
@@ -789,9 +789,28 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
     }
   }
 
-  lines.push(
-    `    return model;`,
-    `  }`,
+  lines.push(`    return model;`, `  }`);
+  return lines;
+}
+
+function compileGeometrySpecToJava(spec = {}, options = {}) {
+  const validation = validateGeometrySpec(spec);
+  if (!validation.valid) {
+    return {
+      status: "INVALID_GEOMETRY_SPEC",
+      validation,
+      javaCode: null
+    };
+  }
+
+  const className = options.className || spec.className || "Comsol62GeometryModel";
+  const methodLines = buildGeometryMethodLines(spec, validation);
+  const lines = [
+    `import com.comsol.model.*;`,
+    `import com.comsol.model.util.*;`,
+    ``,
+    `public class ${className} {`,
+    ...methodLines,
     ``,
     `  public static Model run() {`,
     `    Model model = ModelUtil.create("Model");`,
@@ -802,7 +821,7 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
     `    run();`,
     `  }`,
     `}`
-  );
+  ];
 
   return {
     status: "COMPILED_GEOMETRY_JAVA",
@@ -948,6 +967,22 @@ const GEOMETRY_PRESETS = {
       ],
       selections: [
         {
+          tag: "sel_inlet",
+          type: "FaceBox",
+          feature: "blk_sink",
+          face: "xmin",
+          entitydim: 2,
+          label: "Microchannel Inlet Face"
+        },
+        {
+          tag: "sel_outlet",
+          type: "FaceBox",
+          feature: "blk_sink",
+          face: "xmax",
+          entitydim: 2,
+          label: "Microchannel Outlet Face"
+        },
+        {
           tag: "sel_heated_base",
           type: "FaceBox",
           feature: "blk_sink",
@@ -1046,6 +1081,8 @@ module.exports = {
   parseLengthMeters,
   computeFeatureAABB,
   analyzeBoxInteraction,
+  buildFaceBoxBounds,
+  buildGeometryMethodLines,
   validateGeometrySpec,
   compileGeometrySpecToJava,
   auditJavaGeometryCode,

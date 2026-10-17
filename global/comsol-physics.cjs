@@ -136,7 +136,89 @@ const COUPLING_CATALOG = {
   }
 };
 
-function validatePhysicsSpec(spec = {}) {
+function resolveUnifiedModelSpec(rawSpec = {}) {
+  const cloned = JSON.parse(JSON.stringify(rawSpec || {}));
+  let baseGeom = null;
+
+  const presetKey = cloned.geometryPreset || (cloned.geometry && cloned.geometry.preset);
+  if (presetKey) {
+    baseGeom = JSON.parse(JSON.stringify(GEOM_MOD.getGeometryPreset(presetKey).spec));
+  }
+
+  // Support unified flat spec where geometry 'features' and 'selections' sit alongside 'physics'
+  if (!cloned.geometry && Array.isArray(cloned.features)) {
+    cloned.geometry = {
+      dimension: cloned.dimension ?? 3,
+      lengthUnit: cloned.lengthUnit,
+      parameters: cloned.parameters || {},
+      features: cloned.features,
+      selections: cloned.selections || [],
+      finalization: cloned.finalization
+    };
+  }
+
+  if (baseGeom) {
+    const inlineGeom = cloned.geometry || {};
+    cloned.geometry = {
+      ...baseGeom,
+      ...inlineGeom,
+      parameters: {
+        ...(baseGeom.parameters || {}),
+        ...(inlineGeom.parameters || {}),
+        ...(cloned.parameters || {})
+      },
+      features: Array.isArray(inlineGeom.features) ? inlineGeom.features : baseGeom.features || [],
+      selections: [
+        ...(baseGeom.selections || []),
+        ...(Array.isArray(inlineGeom.selections) ? inlineGeom.selections : [])
+      ]
+    };
+    cloned.parameters = { ...cloned.geometry.parameters };
+  } else if (cloned.geometry) {
+    cloned.geometry.parameters = {
+      ...(cloned.geometry.parameters || {}),
+      ...(cloned.parameters || {})
+    };
+    cloned.parameters = { ...cloned.geometry.parameters };
+  }
+
+  // Synthesize FaceBox selections when a physics feature uses an inline { feature, face } selector
+  if (cloned.geometry) {
+    cloned.geometry.selections = Array.isArray(cloned.geometry.selections) ? cloned.geometry.selections : [];
+    const existingSelTags = new Set(cloned.geometry.selections.map(s => s && s.tag).filter(Boolean));
+    for (const phys of cloned.physics || []) {
+      for (const feat of (phys && phys.features) || []) {
+        const inlineSel =
+          feat && feat.selection && typeof feat.selection === "object"
+            ? feat.selection
+            : feat && feat.feature && feat.face
+              ? { feature: feat.feature, face: feat.face, tol: feat.tol }
+              : null;
+        if (inlineSel && inlineSel.feature && inlineSel.face) {
+          const autoTag =
+            inlineSel.tag || `sel_auto_${inlineSel.feature}_${String(inlineSel.face).toLowerCase()}`;
+          if (!existingSelTags.has(autoTag)) {
+            cloned.geometry.selections.push({
+              tag: autoTag,
+              type: "FaceBox",
+              feature: inlineSel.feature,
+              face: inlineSel.face,
+              tol: inlineSel.tol,
+              entitydim: 2
+            });
+            existingSelTags.add(autoTag);
+          }
+          feat.selection = autoTag;
+        }
+      }
+    }
+  }
+
+  return cloned;
+}
+
+function validatePhysicsSpec(rawSpec = {}) {
+  const spec = resolveUnifiedModelSpec(rawSpec);
   const errors = [];
   const warnings = [];
 
@@ -149,13 +231,21 @@ function validatePhysicsSpec(spec = {}) {
     errors.push("Physics spec must define at least one physics interface in 'physics'");
   }
 
-  // Selection dimension map from optional geometry spec
+  // 1. Unified Geometry + Selection Validation via comsol-geometry.cjs
+  let geometryValidation = null;
   const selectionDims = {};
   if (spec.geometry) {
+    geometryValidation = GEOM_MOD.validateGeometrySpec(spec.geometry);
+    for (const gErr of geometryValidation.errors || []) {
+      errors.push(`GEOMETRY_ERROR: ${gErr}`);
+    }
+    for (const gWarn of geometryValidation.warnings || []) {
+      warnings.push(`GEOMETRY_WARNING: ${gWarn}`);
+    }
     const geomDim = spec.geometry.dimension || 3;
     if (Array.isArray(spec.geometry.features)) {
       for (const gf of spec.geometry.features) {
-        if (gf && gf.tag && gf.selresult) {
+        if (gf && gf.tag && gf.selresult !== false) {
           selectionDims[gf.tag] = geomDim;
         }
       }
@@ -172,6 +262,16 @@ function validatePhysicsSpec(spec = {}) {
   const providedMatProps = new Set();
   for (const mat of materials) {
     if (!mat || typeof mat !== "object") continue;
+    if (
+      spec.geometry &&
+      mat.selection &&
+      mat.selection !== "all" &&
+      selectionDims[mat.selection] === undefined
+    ) {
+      errors.push(
+        `UNKNOWN_SELECTION: Material '${mat.tag || "mat"}' references selection '${mat.selection}' which is not defined in geometry`
+      );
+    }
     const props = mat.properties || {};
     for (const k of Object.keys(props)) {
       providedMatProps.add(k.toLowerCase());
@@ -230,15 +330,16 @@ function validatePhysicsSpec(spec = {}) {
         );
       }
 
-      if (
-        feat.selection &&
-        feat.selection !== "all" &&
-        selectionDims[feat.selection] !== undefined &&
-        selectionDims[feat.selection] !== expectedDim
-      ) {
-        errors.push(
-          `DIMENSION_MISMATCH: Feature '${feat.tag || feat.type}' (${feat.type}, entitydim=${expectedDim}) is bound to selection '${feat.selection}' with entitydim=${selectionDims[feat.selection]}`
-        );
+      if (spec.geometry && feat.selection && feat.selection !== "all") {
+        if (selectionDims[feat.selection] === undefined) {
+          errors.push(
+            `UNKNOWN_SELECTION: Feature '${feat.tag || feat.type}' in '${pTag}' references selection '${feat.selection}' which is not defined in geometry`
+          );
+        } else if (selectionDims[feat.selection] !== expectedDim) {
+          errors.push(
+            `DIMENSION_MISMATCH: Feature '${feat.tag || feat.type}' (${feat.type}, entitydim=${expectedDim}) is bound to selection '${feat.selection}' with entitydim=${selectionDims[feat.selection]}`
+          );
+        }
       }
 
       if (catalogEntry.referenceBoundaryTypes.includes(feat.type)) {
@@ -327,7 +428,9 @@ function validatePhysicsSpec(spec = {}) {
     valid: errors.length === 0,
     errors,
     warnings,
-    activePhysics: activeByType
+    activePhysics: activeByType,
+    geometryValidation,
+    selectionDims
   };
 }
 
@@ -363,8 +466,14 @@ function applySingleBoundaryOverride(findPhys, pKey, fTag, override) {
 }
 
 function tunePhysicsSpec(spec = {}, adjustments = {}) {
-  const cloned = JSON.parse(JSON.stringify(spec));
+  const cloned = resolveUnifiedModelSpec(spec);
   cloned.parameters = { ...(cloned.parameters || {}), ...(adjustments.parameters || {}) };
+  if (cloned.geometry) {
+    cloned.geometry.parameters = {
+      ...(cloned.geometry.parameters || {}),
+      ...cloned.parameters
+    };
+  }
   cloned.physics = Array.isArray(cloned.physics) ? cloned.physics : [];
   cloned.couplings = Array.isArray(cloned.couplings) ? cloned.couplings : [];
 
@@ -445,11 +554,12 @@ function tunePhysicsSpec(spec = {}, adjustments = {}) {
     }
   }
 
-  const validation = validatePhysicsSpec(cloned);
+  const resolvedAfterTune = resolveUnifiedModelSpec(cloned);
+  const validation = validatePhysicsSpec(resolvedAfterTune);
   return {
     status: "TUNED_PHYSICS_SPEC",
-    spec: cloned,
-    tunedSpec: cloned,
+    spec: resolvedAfterTune,
+    tunedSpec: resolvedAfterTune,
     validation
   };
 }
@@ -478,7 +588,8 @@ function emitPropertySet(targetExpr, propKey, propVal) {
   return `${targetExpr}.set(${JSON.stringify(propKey)}, ${JSON.stringify(String(propVal))});`;
 }
 
-function compilePhysicsSpecToJava(spec = {}, options = {}) {
+function compilePhysicsSpecToJava(rawSpec = {}, options = {}) {
+  const spec = resolveUnifiedModelSpec(rawSpec);
   const validation = validatePhysicsSpec(spec);
   if (!validation.valid) {
     return {
@@ -501,31 +612,14 @@ function compilePhysicsSpecToJava(spec = {}, options = {}) {
     `public class ${className} {`
   ];
 
-  // If geometry spec is embedded, generate buildGeometry helper via comsol-geometry.cjs
+  // Unified Geometry + Selection code generation via comsol-geometry.cjs
   if (spec.geometry) {
-    const geomCompiled = GEOM_MOD.compileGeometrySpecToJava(
-      {
-        ...spec.geometry,
-        parameters: { ...(spec.geometry.parameters || {}), ...(spec.parameters || {}) }
-      },
-      { className: `${className}GeomHelper` }
+    const geomMethodLines = GEOM_MOD.buildGeometryMethodLines(
+      spec.geometry,
+      validation.geometryValidation
     );
-    if (geomCompiled.status !== "COMPILED_GEOMETRY_JAVA") {
-      return {
-        status: "INVALID_GEOMETRY_SPEC",
-        validation: geomCompiled.validation,
-        javaCode: null
-      };
-    }
-    const bodyMatch = geomCompiled.javaCode.match(
-      /public static Model buildGeometry\(Model model\) \{([\s\S]*?)\n  \}\n\n  public static Model run\(\)/
-    );
-    if (bodyMatch) {
-      lines.push(`  public static Model buildGeometry(Model model) {`);
-      lines.push(bodyMatch[1]);
-      lines.push(`  }`);
-      lines.push(``);
-    }
+    lines.push(...geomMethodLines);
+    lines.push(``);
   }
 
   lines.push(`  public static Model configurePhysics(Model model) {`);
@@ -753,37 +847,19 @@ function auditJavaPhysicsCode(sourceCode) {
 
 const PHYSICS_PRESETS = {
   "conjugate-heat-microchannel": {
-    description: "COMSOL 6.2 Conjugate Heat Transfer (LaminarFlow + HeatTransfer + NonIsothermalFlow) with FaceBox selections",
+    description: "COMSOL 6.2 Conjugate Heat Transfer (LaminarFlow + HeatTransfer + NonIsothermalFlow) unified with microchannel-heatsink 3D geometry preset",
     spec: {
       className: "ConjugateHeatMicrochannelModel",
+      geometryPreset: "microchannel-heatsink",
       parameters: {
-        L_ch: "10[mm]",
-        W_ch: "2[mm]",
-        H_ch: "1[mm]",
         T_in: "293.15[K]",
         q_base: "5e4[W/m^2]",
         U_in: "0.2[m/s]"
       },
-      geometry: {
-        dimension: 3,
-        features: [
-          {
-            tag: "blk1",
-            type: "Block",
-            size: ["L_ch", "W_ch", "H_ch"],
-            pos: ["0[mm]", "0[mm]", "0[mm]"]
-          }
-        ],
-        selections: [
-          { tag: "sel_inlet", type: "FaceBox", feature: "blk1", face: "xmin", entitydim: 2 },
-          { tag: "sel_outlet", type: "FaceBox", feature: "blk1", face: "xmax", entitydim: 2 },
-          { tag: "sel_heated_base", type: "FaceBox", feature: "blk1", face: "zmin", entitydim: 2 }
-        ]
-      },
       materials: [
         {
           tag: "mat_water",
-          label: "Cooling Water",
+          label: "Cooling Fluid & Substrate Effective Props",
           selection: "all",
           properties: {
             density: "1000[kg/m^3]",
@@ -970,7 +1046,7 @@ const PHYSICS_PRESETS = {
 
 function getPhysicsPreset(name) {
   const key = String(name || "").toLowerCase().trim();
-  if (!PHYSICS_PRESETS[key]) {
+  if (!Object.prototype.hasOwnProperty.call(PHYSICS_PRESETS, key)) {
     throw new Error(
       `Unknown physics preset '${name}'. Available: ${Object.keys(PHYSICS_PRESETS).join(", ")}`
     );
@@ -990,6 +1066,7 @@ module.exports = {
   FEATURE_CATALOG,
   COUPLING_CATALOG,
   PHYSICS_PRESETS,
+  resolveUnifiedModelSpec,
   validatePhysicsSpec,
   tunePhysicsSpec,
   compilePhysicsSpecToJava,

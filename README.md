@@ -32,23 +32,23 @@ node deploy-comsol.cjs install --with-core
 node deploy-comsol.cjs doctor
 ```
 
-## 常用 CLI 命令
+## 常用 CLI 命令（几何 + 物理场一体化管线）
+
+`comsol-geometry.cjs`（精准几何子模块）与 `comsol-physics.cjs`（物理场理解与调优子模块）作为主模块 `comsol.cjs` 的两个内聚附属子模块（`comsol.submodules.geometry` / `comsol.submodules.physics`）协同工作：共享参数表、自动将几何 3D 包围盒（AABB）转化为物理场边界 `FaceBox` 选择集、并在调优几何尺寸时自动重算所有物理边界坐标。
 
 ```powershell
-# 1. 查看内置的精准几何预设与多物理场预设
-node ~/.dual-agent/comsol.cjs list-geometry-presets
-node ~/.dual-agent/comsol.cjs list-physics-presets
+# 1. 一键查看所有内置几何与多物理场预设
+node ~/.dual-agent/comsol.cjs list-presets
 
-# 2. 校验、调优并生成完整的多物理场耦合 COMSOL 6.2 Java 模型（含精准几何 + 材料 + 边界/初值/约束 + 耦合 + 求解器）
-node ~/.dual-agent/comsol.cjs validate-physics --preset conjugate-heat-microchannel
-node ~/.dual-agent/comsol.cjs tune-physics --preset thermo-mechanical-bracket --patch patch.json --out tuned-spec.json
-node ~/.dual-agent/comsol.cjs build-physics --preset joule-heating-busbar --out JouleBusbarModel.java
+# 2. 一体化校验、调优并编译完整的 COMSOL 6.2 多物理场模型（几何 AABB + 选择集 + 材料 + 物理场约束 + 耦合 + 求解器）
+node ~/.dual-agent/comsol.cjs validate-model --preset conjugate-heat-microchannel
+node ~/.dual-agent/comsol.cjs tune-model --preset conjugate-heat-microchannel --param L_sink=25[mm] --param U_in=0.45[m/s] --auto-align-init --out tuned-model.json
+node ~/.dual-agent/comsol.cjs build-model --spec tuned-model.json --out MicrochannelCHT.java
 
-# 3. 审计任意 COMSOL 6.2 Java 源码中的几何与物理场约束错误
-node ~/.dual-agent/comsol.cjs audit-geometry --source JouleBusbarModel.java
-node ~/.dual-agent/comsol.cjs audit-physics --source JouleBusbarModel.java
+# 3. 一体化静态审计（同时执行 Java 语法 + 3D 几何 API 审计 + 物理场约束与耦合审计）
+node ~/.dual-agent/comsol.cjs audit-model --source MicrochannelCHT.java
 
-# 4. 编译并运行批处理求解（失败时自动触发 Codex 修复）
-node ~/.dual-agent/comsol.cjs compile-java --source JouleBusbarModel.java --auto-fix
-node ~/.dual-agent/comsol.cjs run-batch --input JouleBusbarModel.class --output JouleBusbar_solved.mph --auto-fix
+# 4. 编译并运行批处理求解（失败时自动触发 Codex 闭环修复）
+node ~/.dual-agent/comsol.cjs compile-java --source MicrochannelCHT.java --auto-fix
+node ~/.dual-agent/comsol.cjs run-batch --input MicrochannelCHT.class --output MicrochannelCHT_solved.mph --auto-fix
 ```

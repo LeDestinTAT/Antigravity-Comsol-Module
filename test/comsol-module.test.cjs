@@ -536,3 +536,49 @@ test("14. Java Physics Audit (auditJavaPhysicsCode) & Physics CLI commands catch
   assert.equal(JSON.parse(auditCli.stdout).valid, true);
 });
 
+test("15. Unified COMSOL Pipeline: Geometry & Physics sub-modules operate as one integrated system (shared presets, inline FaceBox synthesis, joint geometry+physics tuning & cross-validation)", () => {
+  // 1) Verify submodules are attached to comsol main module
+  assert.ok(comsol.submodules.geometry);
+  assert.ok(comsol.submodules.physics);
+  assert.ok(comsol.submodules.templates);
+
+  // 2) conjugate-heat-microchannel directly composes the microchannel-heatsink geometry preset (with Difference blk_sink - blk_chan1/2)
+  const unifiedPreset = comsol.getModelPreset("conjugate-heat-microchannel");
+  const compiled = comsol.compileModelSpecToJava(unifiedPreset.spec);
+  assert.equal(compiled.status, "COMPILED_PHYSICS_JAVA");
+  assert.ok(compiled.javaCode.includes('.selection("input2").set(new String[]{"blk_chan1", "blk_chan2"})'));
+  assert.ok(compiled.javaCode.includes('.multiphysics().create("nitf1", "NonIsothermalFlow", 3)'));
+
+  // 3) Inline geometric selector { feature: "blk_sink", face: "top" } on a physics boundary condition automatically synthesizes a coordinate FaceBox selection
+  //    AND tuning geometry parameter L_sink from 10[mm] to 25[mm] recomputes the 3D AABB (xmax moves to 0.025m) and updates FaceBox selections!
+  const tuned = comsol.tuneModelSpec(unifiedPreset.spec, {
+    parameters: { L_sink: "25[mm]", U_in: "0.45[m/s]" },
+    addFeatures: {
+      ht: [
+        {
+          tag: "conv_top",
+          type: "ConvectiveHeatFlux",
+          selection: { feature: "blk_sink", face: "top" },
+          props: { h: "50[W/(m^2*K)]", Text: "293.15[K]" }
+        }
+      ]
+    }
+  });
+  assert.equal(tuned.validation.valid, true, tuned.validation.errors.join("; "));
+  assert.ok(Math.abs(tuned.validation.geometryValidation.boundsByTag.blk_sink.xmax - 0.025) < 1e-9);
+  const tunedCompiled = comsol.compileModelSpecToJava(tuned.spec);
+  assert.ok(tunedCompiled.javaCode.includes('.selection().create("sel_auto_blk_sink_top", "Box")'));
+  assert.ok(tunedCompiled.javaCode.includes('.feature("conv_top").selection().named("sel_auto_blk_sink_top")'));
+  assert.ok(tunedCompiled.javaCode.includes('"0.025001"')); // updated xmax FaceBox bound for L_sink = 25[mm]
+
+  // 4) Unified validation catches both geometry errors (disjoint Difference) AND dangling selection names in physics
+  const brokenUnified = comsol.tuneModelSpec(unifiedPreset.spec, {
+    addFeatures: {
+      ht: [{ tag: "bad_sel", type: "HeatFluxBoundary", selection: "sel_nonexistent", props: { q0: "10[W/m^2]" } }]
+    }
+  });
+  assert.equal(brokenUnified.validation.valid, false);
+  assert.ok(brokenUnified.validation.errors.some(e => e.includes("UNKNOWN_SELECTION") && e.includes("sel_nonexistent")));
+});
+
+

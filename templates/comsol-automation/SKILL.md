@@ -27,16 +27,14 @@ description: Automate COMSOL 6.2 precision geometry generation, physics understa
 
 ## CLI Commands (`node ~/.dual-agent/comsol.cjs`)
 
-1. `doctor [--check-python]` | `list-templates` | `list-geometry-presets` | `list-physics-presets`
-2. **Precision Geometry**:
-   - `validate-geometry --spec <spec.json> | --preset <microchannel-heatsink|core-shell-cylinder>`
-   - `build-geometry (--spec <spec.json> | --preset <name>) [--out <GeomModel.java>] [--class <Name>]`
-   - `audit-geometry --source <Model.java>`
-3. **Physics Understanding & Tuning**:
-   - `validate-physics --spec <spec.json> | --preset <conjugate-heat-microchannel|thermo-mechanical-bracket|joule-heating-busbar>`
-   - `tune-physics (--spec <spec.json> | --preset <name>) --patch <patch.json> [--out <tuned.json>]`
-   - `build-physics (--spec <spec.json> | --preset <name>) [--patch <patch.json>] [--out <PhysicsModel.java>] [--class <Name>]`
-   - `audit-physics --source <Model.java>`
+1. `doctor [--check-python]` | `list-presets` | `list-templates`
+2. **Unified Model Pipeline (Geometry + Physics Integrated)**:
+   - `validate-model --spec <spec.json> | --preset <conjugate-heat-microchannel|thermo-mechanical-bracket|joule-heating-busbar|microchannel-heatsink|core-shell-cylinder>`
+   - `tune-model (--spec <spec.json> | --preset <name>) [--patch <patch.json>] [--param k=v ...] [--auto-align-init] [--out <tuned.json>]`
+   - `build-model (--spec <spec.json> | --preset <name>) [--patch <patch.json>] [--out <Model.java>] [--class <Name>]`
+   - `audit-model --source <Model.java>`
+3. **Sub-Module Aliases (`comsol.submodules.geometry` / `comsol.submodules.physics`)**:
+   - `validate-geometry` / `build-geometry` / `audit-geometry` | `validate-physics` / `tune-physics` / `build-physics` / `audit-physics`
 4. **Model Compile & Solve**:
    - `scaffold-java --domain <heat-transfer|fluid-flow|solid-mechanics> --out <Model.java>`
    - `validate-java --source <Model.java>` | `compile-java --source <Model.java> [--auto-fix] [--project <dir>]`

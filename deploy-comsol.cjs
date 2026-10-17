@@ -135,6 +135,11 @@ function installComsolModule(options = {}) {
     templatesPath: destTemplates,
     geometryPath: destGeometry,
     physicsPath: destPhysics,
+    submodules: {
+      geometry: destGeometry,
+      physics: destPhysics,
+      templates: destTemplates
+    },
     skillPath,
     comsolInstalled: envCheck.installed,
     comsolRoot: envCheck.comsolRoot,
