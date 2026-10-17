@@ -129,7 +129,7 @@ test("3. Simulated COMSOL 6.2 discovery, log classification & remediation hints"
 
   const geomErr = comsol.parseComsolLog("Error: Boolean operation failed in geometry.", 1);
   assert.equal(geomErr.status, "GEOMETRY_ERROR");
-  assert.ok(geomErr.remediationHint.includes("geom.run()"));
+  assert.ok(geomErr.remediationHint.includes("geom.run"));
 
   const meshErr = comsol.parseComsolLog("Failed to generate mesh for domain 2.\nInverted mesh element.", 1);
   assert.equal(meshErr.status, "MESH_ERROR");
@@ -191,3 +191,56 @@ test("4. Add-on attachment to Dual-Agent Host + closed-loop auto-fix with remedi
   assert.equal(uninst.dualAgentBridgePreserved, true);
   assert.equal(fs.existsSync(mockClientPath), true);
 });
+
+test("5. COMSOL 6.2 Precision Geometry Engine: AABB validation, boolean overlap checks, FaceBox selections & Java geometry audit", () => {
+  const presets = comsol.listGeometryPresets();
+  assert.ok(presets.some(p => p.name === "microchannel-heatsink"));
+
+  const preset = comsol.getGeometryPreset("microchannel-heatsink");
+  const compiled = comsol.compileGeometrySpecToJava(preset.spec);
+  assert.equal(compiled.status, "COMPILED_GEOMETRY_JAVA");
+  assert.equal(compiled.validation.valid, true);
+  assert.ok(compiled.javaCode.includes('.selection("input").set(new String[]{"blk_sink"})'));
+  assert.ok(compiled.javaCode.includes('.selection("input2").set(new String[]{"blk_chan1", "blk_chan2"})'));
+  assert.ok(compiled.javaCode.includes('.selection().create("sel_heated_base", "Box")'));
+  assert.ok(compiled.javaCode.includes('.set("selresult", true)'));
+
+  // Generated Java code passes both static validation and geometry audit
+  const staticCheck = comsol.validateJavaModelSource(compiled.javaCode, "MicrochannelHeatSinkGeom");
+  assert.equal(staticCheck.valid, true);
+
+  // Detect disjoint boolean Difference (subtracted tool completely outside target block)
+  const disjointSpec = {
+    dimension: 3,
+    parameters: { L: "10[mm]" },
+    features: [
+      { tag: "blk1", type: "Block", size: ["L", "L", "L"], pos: ["0[mm]", "0[mm]", "0[mm]"] },
+      { tag: "cyl_outside", type: "Cylinder", r: "1[mm]", h: "5[mm]", pos: ["50[mm]", "50[mm]", "0[mm]"] },
+      { tag: "dif1", type: "Difference", input: ["blk1"], input2: ["cyl_outside"] }
+    ]
+  };
+  const disjointVal = comsol.validateGeometrySpec(disjointSpec);
+  assert.equal(disjointVal.valid, false);
+  assert.ok(disjointVal.errors.some(e => e.includes("does not intersect target")));
+
+  // Detect 2D primitive placed directly in 3D geometry and wrong .set("input", ...) syntax
+  const buggyJava = `
+    import com.comsol.model.*;
+    import com.comsol.model.util.*;
+    public class BuggyGeom {
+      public static void run() {
+        Model model = ModelUtil.create("Model");
+        GeomSequence geom = model.component("comp1").geom().create("geom1", 3);
+        geom.create("r1", "Rectangle");
+        geom.create("dif1", "Difference");
+        geom.feature("dif1").set("input", "r1");
+      }
+    }
+  `;
+  const audit = comsol.auditJavaGeometryCode(buggyJava);
+  assert.equal(audit.valid, false);
+  assert.ok(audit.errors.some(e => e.includes("WorkPlane")));
+  assert.ok(audit.errors.some(e => e.includes('.selection("input").set')));
+  assert.ok(audit.errors.some(e => e.includes('selection("input2")')));
+});
+

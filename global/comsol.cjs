@@ -4,6 +4,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const TEMPLATES_MOD = require(path.join(__dirname, "comsol-templates.cjs"));
+const GEOM_MOD = require(path.join(__dirname, "comsol-geometry.cjs"));
 
 function getHomeDir(overrideHome) {
   if (overrideHome) return path.resolve(overrideHome);
@@ -779,6 +780,76 @@ function main() {
       return;
     }
 
+    if (cmd === "list-geometry-presets") {
+      console.log(JSON.stringify(GEOM_MOD.listGeometryPresets(), null, 2));
+      return;
+    }
+
+    if (cmd === "validate-geometry") {
+      const specFile = args.spec || args.input || args._[1];
+      const presetName = args.preset;
+      const spec = presetName
+        ? GEOM_MOD.getGeometryPreset(presetName).spec
+        : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const res = GEOM_MOD.validateGeometrySpec(spec);
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.valid) process.exit(2);
+      return;
+    }
+
+    if (cmd === "build-geometry") {
+      const specFile = args.spec || args.input;
+      const presetName = args.preset;
+      if (!specFile && !presetName) {
+        throw new Error("build-geometry requires --spec <spec.json> or --preset <name>");
+      }
+      const spec = presetName
+        ? GEOM_MOD.getGeometryPreset(presetName).spec
+        : JSON.parse(fs.readFileSync(specFile, "utf8"));
+      const outPath = args.out || args.output || args._[1];
+      const className =
+        args.class ||
+        args["class-name"] ||
+        (outPath ? path.basename(outPath, ".java") : spec.className || "Comsol62GeometryModel");
+      const compiled = GEOM_MOD.compileGeometrySpecToJava(spec, { className });
+      if (compiled.status !== "COMPILED_GEOMETRY_JAVA") {
+        console.log(JSON.stringify(compiled, null, 2));
+        process.exit(2);
+      }
+      let resolvedOut = null;
+      if (outPath) {
+        resolvedOut = path.resolve(outPath);
+        fs.mkdirSync(path.dirname(resolvedOut), { recursive: true });
+        fs.writeFileSync(resolvedOut, compiled.javaCode, "utf8");
+      }
+      console.log(
+        JSON.stringify(
+          {
+            status: compiled.status,
+            className: compiled.className,
+            outputFile: resolvedOut,
+            validation: compiled.validation,
+            javaCode: resolvedOut ? undefined : compiled.javaCode
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
+
+    if (cmd === "audit-geometry") {
+      const sourceFile = args.source || args.input || args._[1];
+      if (!sourceFile || !fs.existsSync(sourceFile)) {
+        throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
+      }
+      const code = fs.readFileSync(sourceFile, "utf8");
+      const res = GEOM_MOD.auditJavaGeometryCode(code);
+      console.log(JSON.stringify(res, null, 2));
+      if (!res.valid) process.exit(2);
+      return;
+    }
+
     if (cmd === "template") {
       const domain = args.domain || args._[1] || "heat-transfer";
       const tpl = TEMPLATES_MOD.getTemplate(domain);
@@ -863,7 +934,7 @@ function main() {
     }
 
     throw new Error(
-      `Unknown command: ${cmd}. Supported: doctor, list-templates, template, scaffold-java, validate-java, compile-java, run-batch, parse-log`
+      `Unknown command: ${cmd}. Supported: doctor, list-templates, template, list-geometry-presets, validate-geometry, build-geometry, audit-geometry, scaffold-java, validate-java, compile-java, run-batch, parse-log`
     );
   } catch (err) {
     console.error(err.message);
@@ -887,5 +958,6 @@ module.exports = {
   scaffoldJavaModel,
   compileComsolJava,
   runComsolBatch,
-  ...TEMPLATES_MOD
+  ...TEMPLATES_MOD,
+  ...GEOM_MOD
 };

@@ -1,30 +1,31 @@
 ---
 name: comsol-automation
-description: Automate COMSOL Multiphysics model generation (Java API & Python MPh), batch solving, and closed-loop auto-fix with the Dual-Agent Bridge.
+description: Automate COMSOL 6.2 precision geometry generation, Java/MPh model compilation, batch solving, and closed-loop auto-fix with the Dual-Agent Bridge.
 ---
 
-# COMSOL Multiphysics Add-On (`~/.dual-agent/comsol.cjs`)
+# COMSOL 6.2 Add-On (`~/.dual-agent/comsol.cjs`)
 
 - **Architecture**: Attaches to `~/.dual-agent` as an add-on (`merged-dual-agent` when `client.cjs` is present, or `standalone` when installed alone).
-- **3 Execution Pipelines**:
-  1. **From-Scratch Model Generation (`Java API`)**: `scaffold-java` -> `validate-java` -> `compile-java` (`comsolcompile.exe`) -> `run-batch` (`comsolbatch.exe -inputfile Model.class -outputfile solved.mph`). Zero Python dependency required.
-  2. **Existing `.mph` Batch & Parameter Sweep**: `run-batch --input model.mph --param k=v ...`
-  3. **Python `MPh` Inspection & Expression Evaluation**: Use `template --domain mph-python` when Python `mph` is installed.
+- **COMSOL 6.2 Precision Geometry Engine (`comsol-geometry.cjs`)**:
+  - Evaluates COMSOL unit expressions (`10[mm]`, `500[um]`) into 3D bounding boxes (`AABB`) before running COMSOL.
+  - Verifies boolean `Difference`/`Union`/`Intersection` overlap (prevents disjoint subtraction, complete target erasure, and micro-gap sliver faces).
+  - Replaces fragile hardcoded face IDs (`new int[]{1}`) with coordinate-based `Box` / `FaceBox` selections (`xmin/xmax/ymin/ymax/zmin/zmax`) and `set("selresult", true)`.
 
-## Verified COMSOL Java API Rules (Anti-Hallucination)
+## COMSOL 6.2 Anti-Hallucination Rules
 
-- Always include `import com.comsol.model.*;` and `import com.comsol.model.util.*;` and initialize via `Model model = ModelUtil.create("Model");`.
-- Use `.create(tag, type)` (never `.add()`):
-  - Component & 3D Geom: `model.component().create("comp1", true); model.component("comp1").geom().create("geom1", 3);`
-  - Physics: `model.component("comp1").physics().create("ht", "HeatTransfer", "geom1");` (or `"LaminarFlow"`, `"SolidMechanics"`, `"Electrostatics"`).
-  - Mesh & Study: `model.component("comp1").mesh().create("mesh1"); model.study().create("std1"); model.study("std1").create("stat", "Stationary");`
-  - Vector properties (`size`, `FperArea`, `thermalconductivity`) require `new String[]{...}`; boundary selections require `.selection().set(new int[]{...})`.
+- **Boolean & Extrude Inputs**: Always use `geom.feature(tag).selection("input").set(new String[]{...})` (and `.selection("input2").set(...)` for `"Difference"`). Never use `.set("input", ...)`.
+- **2D Sketching in 3D**: Never create `"Rectangle"` or `"Circle"` directly on a 3D geometry; wrap inside `"WorkPlane"` (`geom.feature("wp1").geom().create("r1", "Rectangle")`) followed by `"Extrude"` or `"Revolve"`.
+- **Boundary Selections**: After booleans/arrays, COMSOL 6.2 renumbers boundaries. Always use `Box` selections (`model.component("comp1").selection().create(tag, "Box")`) and `.selection().named(tag)`.
 
 ## CLI Commands (`node ~/.dual-agent/comsol.cjs`)
 
-1. `doctor [--check-python]`: Detects COMSOL binaries, Python `mph`, and Dual-Agent attachment state.
-2. `list-templates` | `template --domain <heat-transfer|fluid-flow|solid-mechanics|mph-python>`
-3. `scaffold-java --domain <domain> --out <Model.java> [--class <ClassName>]`
-4. `validate-java --source <Model.java>` | `compile-java --source <Model.java> [--auto-fix] [--project <dir>]`
-5. `run-batch --input <model.mph|Model.class> [--output <out.mph>] [--study <std1>] [--param k=v ...] [--batch-log <run.log>] [--dry-run] [--auto-fix] [--project <dir>]`
-6. `parse-log --log <run.log>`: Classifies `COMPLETED`, `GEOMETRY_ERROR`, `MESH_ERROR`, `PARAMETER_ERROR`, `SOLVER_NONCONVERGENCE` with domain remediation hints.
+1. `doctor [--check-python]` | `list-templates` | `list-geometry-presets`
+2. **Precision Geometry**:
+   - `validate-geometry --spec <spec.json> | --preset <microchannel-heatsink|core-shell-cylinder>`
+   - `build-geometry (--spec <spec.json> | --preset <name>) [--out <GeomModel.java>] [--class <Name>]`
+   - `audit-geometry --source <Model.java>`
+3. **Model Compile & Solve**:
+   - `scaffold-java --domain <heat-transfer|fluid-flow|solid-mechanics> --out <Model.java>`
+   - `validate-java --source <Model.java>` | `compile-java --source <Model.java> [--auto-fix] [--project <dir>]`
+   - `run-batch --input <model.mph|Model.class> [--output <out.mph>] [--study <std1>] [--param k=v ...] [--dry-run] [--auto-fix] [--project <dir>]`
+   - `parse-log --log <run.log>`

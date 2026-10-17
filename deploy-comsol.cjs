@@ -95,10 +95,13 @@ function installComsolModule(options = {}) {
 
   const srcComsol = path.join(MODULE_ROOT, "global", "comsol.cjs");
   const srcTemplates = path.join(MODULE_ROOT, "global", "comsol-templates.cjs");
+  const srcGeometry = path.join(MODULE_ROOT, "global", "comsol-geometry.cjs");
   const destComsol = path.join(homeDir, "comsol.cjs");
   const destTemplates = path.join(homeDir, "comsol-templates.cjs");
+  const destGeometry = path.join(homeDir, "comsol-geometry.cjs");
   fs.copyFileSync(srcComsol, destComsol);
   fs.copyFileSync(srcTemplates, destTemplates);
+  fs.copyFileSync(srcGeometry, destGeometry);
 
   const skillText = loadSkillTemplate();
   writeUtf8NoBomSync(skillPath, skillText);
@@ -116,10 +119,11 @@ function installComsolModule(options = {}) {
   const manifest = {
     module: "comsol-automation",
     role: "addon",
-    version: "0.2.0-alpha",
+    version: "0.3.0-alpha",
     installedAt: new Date().toISOString(),
     runtimePath: destComsol,
     templatesPath: destTemplates,
+    geometryPath: destGeometry,
     skillPath,
     comsolInstalled: envCheck.installed,
     comsolRoot: envCheck.comsolRoot,
@@ -138,6 +142,7 @@ function installComsolModule(options = {}) {
     deployedFiles: {
       comsolRuntime: destComsol,
       comsolTemplates: destTemplates,
+      comsolGeometry: destGeometry,
       moduleManifest: manifestPath,
       addonsRegistry: addonsRegistryPath,
       comsolSkill: skillPath
@@ -153,10 +158,11 @@ function uninstallComsolModule() {
   const skillPath = getComsolSkillPath();
   const destComsol = path.join(homeDir, "comsol.cjs");
   const destTemplates = path.join(homeDir, "comsol-templates.cjs");
+  const destGeometry = path.join(homeDir, "comsol-geometry.cjs");
   const manifestPath = path.join(homeDir, "modules", "comsol.json");
 
   const removed = [];
-  for (const target of [destComsol, destTemplates, manifestPath, skillPath]) {
+  for (const target of [destComsol, destTemplates, destGeometry, manifestPath, skillPath]) {
     if (fs.existsSync(target)) {
       try {
         fs.unlinkSync(target);
@@ -180,10 +186,12 @@ function runDoctor(options = {}) {
   const skillPath = getComsolSkillPath();
   const runtimePath = path.join(homeDir, "comsol.cjs");
   const templatesPath = path.join(homeDir, "comsol-templates.cjs");
+  const geometryPath = path.join(homeDir, "comsol-geometry.cjs");
   const manifestPath = path.join(homeDir, "modules", "comsol.json");
 
   const runtimeExists = fs.existsSync(runtimePath);
   const templatesExists = fs.existsSync(templatesPath);
+  const geometryExists = fs.existsSync(geometryPath);
   const manifestExists = fs.existsSync(manifestPath);
   const skillVerify = verifySkillNoBom(skillPath);
   const envCheck = COMSOL_RUNTIME.detectComsolEnvironment({
@@ -191,7 +199,7 @@ function runDoctor(options = {}) {
     comsolRoot: options.comsolRoot
   });
 
-  const healthy = runtimeExists && templatesExists && manifestExists && skillVerify.ok;
+  const healthy = runtimeExists && templatesExists && geometryExists && manifestExists && skillVerify.ok;
   return {
     healthy,
     module: "comsol-automation",
@@ -199,6 +207,7 @@ function runDoctor(options = {}) {
     files: {
       runtimeExists,
       templatesExists,
+      geometryExists,
       manifestExists,
       skillVerify
     },
