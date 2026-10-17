@@ -488,7 +488,7 @@ function compileComsolJava(options = {}) {
     timeoutMs = 120000
   } = options;
 
-  if (!sourceFile || !fs.existsSync(sourceFile)) {
+  if (typeof sourceFile !== "string" || !sourceFile.trim() || !fs.existsSync(sourceFile) || !fs.statSync(sourceFile).isFile()) {
     throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
   }
 
@@ -788,6 +788,12 @@ function main() {
     if (cmd === "validate-geometry") {
       const specFile = args.spec || args.input || args._[1];
       const presetName = args.preset;
+      if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
+          (presetName !== undefined && (typeof presetName !== "string" || !presetName.trim())) ||
+          (!specFile && !presetName)) {
+        throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
+      }
+      if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
       const spec = presetName
         ? GEOM_MOD.getGeometryPreset(presetName).spec
         : JSON.parse(fs.readFileSync(specFile, "utf8"));
@@ -800,6 +806,12 @@ function main() {
     if (cmd === "build-geometry") {
       const specFile = args.spec || args.input;
       const presetName = args.preset;
+      if ((specFile !== undefined && (typeof specFile !== "string" || !specFile.trim())) ||
+          (presetName !== undefined && (typeof presetName !== "string" || !presetName.trim())) ||
+          (!specFile && !presetName)) {
+        throw new Error(cmd + " requires --spec <spec.json> or --preset <name>");
+      }
+      if (specFile && presetName) throw new Error("Choose either --spec or --preset, not both");
       if (!specFile && !presetName) {
         throw new Error("build-geometry requires --spec <spec.json> or --preset <name>");
       }
@@ -840,7 +852,7 @@ function main() {
 
     if (cmd === "audit-geometry") {
       const sourceFile = args.source || args.input || args._[1];
-      if (!sourceFile || !fs.existsSync(sourceFile)) {
+      if (typeof sourceFile !== "string" || !sourceFile.trim() || !fs.existsSync(sourceFile) || !fs.statSync(sourceFile).isFile()) {
         throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
       }
       const code = fs.readFileSync(sourceFile, "utf8");
@@ -869,7 +881,7 @@ function main() {
 
     if (cmd === "validate-java") {
       const sourceFile = args.source || args.input || args._[1];
-      if (!sourceFile || !fs.existsSync(sourceFile)) {
+      if (typeof sourceFile !== "string" || !sourceFile.trim() || !fs.existsSync(sourceFile) || !fs.statSync(sourceFile).isFile()) {
         throw new Error(`Missing Java source file: ${sourceFile || "(none)"}`);
       }
       const code = fs.readFileSync(sourceFile, "utf8");

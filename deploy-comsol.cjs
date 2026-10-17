@@ -55,10 +55,14 @@ function updateAddonsRegistry(homeDir, addonEntry, remove = false) {
   if (fs.existsSync(registryPath)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-      if (parsed && typeof parsed === "object" && parsed.addons) {
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+          parsed.addons && typeof parsed.addons === "object" && !Array.isArray(parsed.addons)) {
         current = parsed;
       }
-    } catch (_) {}
+      else throw new Error("Invalid addons registry structure");
+    } catch (err) {
+      throw new Error("Cannot update addons registry: " + err.message);
+    }
   }
   if (remove) {
     delete current.addons["comsol-automation"];
@@ -87,6 +91,9 @@ function installComsolModule(options = {}) {
       encoding: "utf8",
       windowsHide: true
     });
+    if (res.error || res.status !== 0) {
+      throw new Error("Core installation failed: " + (res.error?.message || res.stderr || res.status));
+    }
     mergedCoreInstall = {
       triggered: true,
       exitCode: res.status

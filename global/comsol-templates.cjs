@@ -280,7 +280,7 @@ const REMEDIATION_HINTS = {
 };
 
 function validateJavaModelSource(sourceCode, expectedClassName = null) {
-  const code = String(sourceCode || "");
+  const code = GEOM_MOD.stripJavaComments(sourceCode);
   const issues = [];
 
   if (!/import\s+com\.comsol\.model\.\*\s*;/.test(code)) {
@@ -314,7 +314,7 @@ function validateJavaModelSource(sourceCode, expectedClassName = null) {
 
 function getTemplate(domain) {
   const key = String(domain || "").toLowerCase().trim();
-  if (!TEMPLATES[key]) {
+  if (!Object.prototype.hasOwnProperty.call(TEMPLATES, key)) {
     const available = Object.keys(TEMPLATES).join(", ");
     throw new Error(`Unknown COMSOL template '${domain}'. Available: ${available}`);
   }

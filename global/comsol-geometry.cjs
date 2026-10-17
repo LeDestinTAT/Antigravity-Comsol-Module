@@ -59,8 +59,120 @@ function parseLengthMeters(expr, paramMap = {}) {
   }
 }
 
+
+const AXES = ["x", "y", "z"];
+function inputTags(input) {
+  return Array.isArray(input) ? input : input ? [input] : [];
+}
+function unionBounds(boxes) {
+  if (!boxes.length || boxes.some(b => !b)) return null;
+  return Object.fromEntries(AXES.flatMap(a => [
+    [a + "min", Math.min(...boxes.map(b => b[a + "min"]))],
+    [a + "max", Math.max(...boxes.map(b => b[a + "max"]))]
+  ]));
+}
+function workPlaneAxes(plane = "xy") {
+  return { xy: [0, 1, 2], yz: [1, 2, 0], zx: [2, 0, 1] }[plane];
+}
+function extendedBounds(feature, params, bounds) {
+  const number = v => parseLengthMeters(v, params);
+  const type = feature.type;
+  if (type === "Rectangle" || type === "Circle") {
+    const p = (feature.pos || [0, 0]).map(number);
+    if (p.length < 2 || p.some(v => v === null)) return null;
+    let lo, hi;
+    if (type === "Circle") {
+      const r = number(feature.r);
+      if (r === null || r <= 0) return null;
+      lo = [p[0] - r, p[1] - r]; hi = [p[0] + r, p[1] + r];
+    } else {
+      const s = (feature.size || []).map(number);
+      if (s.length !== 2 || s.some(v => v === null || v <= 0)) return null;
+      lo = p.slice(0, 2).map((v, i) => v - (feature.base === "center" ? s[i] / 2 : 0));
+      hi = lo.map((v, i) => v + s[i]);
+    }
+    return { xmin: lo[0], xmax: hi[0], ymin: lo[1], ymax: hi[1], zmin: 0, zmax: 0 };
+  }
+  if (type === "WorkPlane") {
+    const axes = workPlaneAxes(feature.quickplane);
+    if (!axes) return null;
+    const offset = number(feature["quick" + AXES[axes[2]]] ?? feature.quickz ?? 0);
+    const box = unionBounds((feature.sketch || []).map(f => computeFeatureAABB(f, params, {})));
+    if (!box || offset === null) return null;
+    const result = {};
+    for (let i = 0; i < 3; i++) {
+      result[AXES[axes[i]] + "min"] = i === 2 ? offset : box[AXES[i] + "min"];
+      result[AXES[axes[i]] + "max"] = i === 2 ? offset : box[AXES[i] + "max"];
+    }
+    // Metadata is deliberately non-enumerable: callers still receive a plain six-coordinate AABB.
+    Object.defineProperty(result, "normalAxis", { value: axes[2] });
+    return result;
+  }
+  const boxes = inputTags(feature.input).map(t => bounds[t]);
+  const box = unionBounds(boxes);
+  if (!box) return null;
+  if (type === "Extrude") {
+    const distances = (Array.isArray(feature.distance) ? feature.distance : [feature.distance]).map(number);
+    const normal = boxes[0].normalAxis;
+    if (!distances.length || distances.some(v => v === null) ||
+        normal === undefined || boxes.some(b => b.normalAxis !== normal)) return null;
+    const a = AXES[normal];
+    box[a + "min"] += Math.min(0, ...distances);
+    box[a + "max"] += Math.max(0, ...distances);
+    return box;
+  }
+  if (type === "Move" || type === "Array") {
+    const d = (feature.displ || [0, 0, 0]).map(number);
+    const n = type === "Array" ? (feature.size || feature.fullsize || []).map(number) : [1, 1, 1];
+    if (d.length !== 3 || d.some(v => v === null) || n.length !== 3 ||
+        n.some(v => !Number.isInteger(v) || v < 1)) return null;
+    for (let i = 0; i < 3; i++) {
+      const delta = d[i] * (type === "Array" ? n[i] - 1 : 1);
+      const includeOriginal = type === "Array" || feature.keep === true;
+      box[AXES[i] + "min"] += includeOriginal ? Math.min(0, delta) : delta;
+      box[AXES[i] + "max"] += includeOriginal ? Math.max(0, delta) : delta;
+    }
+    return box;
+  }
+  if (type === "Revolve") {
+    // Rodrigues rotation of every box corner. Interior angular extrema are included.
+    const axis = (feature.axis || [0, 0, 1]).map(number);
+    const origin = (feature.pos || [0, 0, 0]).map(number);
+    const start = number(feature.angle1 ?? 0);
+    const end = number(feature.angle2 ?? feature.angle ?? 360);
+    if (axis.length !== 3 || origin.length !== 3 || [...axis, ...origin, start, end].some(v => v === null)) return null;
+    const norm = Math.hypot(...axis);
+    if (!norm) return null;
+    const u = axis.map(v => v / norm);
+    const low = Math.min(start, end) * Math.PI / 180;
+    const high = Math.min(Math.max(start, end) * Math.PI / 180, low + 2 * Math.PI);
+    const result = Object.fromEntries(AXES.flatMap(a => [[a + "min", Infinity], [a + "max", -Infinity]]));
+    for (let mask = 0; mask < 8; mask++) {
+      const v = AXES.map((a, i) => box[a + (mask & (1 << i) ? "max" : "min")] - origin[i]);
+      const dot = u.reduce((s, x, i) => s + x * v[i], 0);
+      const cross = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
+      for (let i = 0; i < 3; i++) {
+        const a = v[i] - u[i] * dot, b = cross[i], c = origin[i] + u[i] * dot;
+        const angles = [low, high];
+        const phase = Math.atan2(b, a);
+        const first = Math.ceil((low - phase) / Math.PI);
+        const last = Math.floor((high - phase) / Math.PI);
+        for (let k = first; k <= last; k++) angles.push(phase + k * Math.PI);
+        const values = angles.map(t => c + a * Math.cos(t) + b * Math.sin(t));
+        result[AXES[i] + "min"] = Math.min(result[AXES[i] + "min"], ...values);
+        result[AXES[i] + "max"] = Math.max(result[AXES[i] + "max"], ...values);
+      }
+    }
+    return result;
+  }
+  return null;
+}
+
 function computeFeatureAABB(feature, paramMap = {}, existingBounds = {}) {
   const type = feature.type;
+  if (["Rectangle", "Circle", "WorkPlane", "Extrude", "Revolve", "Array", "Move"].includes(type)) {
+    return extendedBounds(feature, paramMap, existingBounds);
+  }
   const posArr = Array.isArray(feature.pos) ? feature.pos : ["0", "0", "0"];
   const px = parseLengthMeters(posArr[0] ?? 0, paramMap);
   const py = parseLengthMeters(posArr[1] ?? 0, paramMap);
@@ -144,7 +256,7 @@ function computeFeatureAABB(feature, paramMap = {}, existingBounds = {}) {
   if (type === "Union") {
     const inputs = Array.isArray(feature.input) ? feature.input : [];
     const boxes = inputs.map(t => existingBounds[t]).filter(Boolean);
-    if (boxes.length === 0) return null;
+    if (boxes.length === 0 || boxes.length !== inputs.length) return null;
     return {
       xmin: Math.min(...boxes.map(b => b.xmin)),
       xmax: Math.max(...boxes.map(b => b.xmax)),
@@ -158,7 +270,7 @@ function computeFeatureAABB(feature, paramMap = {}, existingBounds = {}) {
   if (type === "Difference") {
     const targets = Array.isArray(feature.input) ? feature.input : [];
     const boxes = targets.map(t => existingBounds[t]).filter(Boolean);
-    if (boxes.length === 0) return null;
+    if (boxes.length === 0 || boxes.length !== targets.length) return null;
     return {
       xmin: Math.min(...boxes.map(b => b.xmin)),
       xmax: Math.max(...boxes.map(b => b.xmax)),
@@ -286,7 +398,7 @@ function validateGeometrySpec(spec = {}) {
       }
     }
 
-    if (type === "Extrude") {
+    if (["Extrude", "Revolve", "Move", "Array"].includes(type)) {
       const inputs = Array.isArray(feat.input) ? feat.input : feat.input ? [feat.input] : [];
       if (inputs.length === 0) {
         errors.push(`Extrude '${tag}' requires 'input' referencing a prior WorkPlane tag`);
@@ -501,7 +613,7 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
 
   for (const feat of features) {
     const t = JSON.stringify(feat.tag);
-    lines.push(`    geom.create(${t}, ${JSON.stringify(feat.type)});`);
+    lines.push(`    geom.create(${t}, ${JSON.stringify(dim === 3 && ["Fillet", "Chamfer"].includes(feat.type) ? feat.type + "3D" : feat.type)});`);
     if (feat.label) {
       lines.push(`    geom.feature(${t}).label(${JSON.stringify(feat.label)});`);
     }
@@ -541,8 +653,10 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
     } else if (feat.type === "WorkPlane") {
       lines.push(`    geom.feature(${t}).set("planetype", "quick");`);
       lines.push(`    geom.feature(${t}).set("quickplane", ${JSON.stringify(feat.quickplane || "xy")});`);
-      if (feat.quickz !== undefined) {
-        lines.push(`    geom.feature(${t}).set("quickz", ${JSON.stringify(String(feat.quickz))});`);
+      const normalKey = "quick" + AXES[workPlaneAxes(feat.quickplane)?.[2] ?? 2];
+      const offset = feat[normalKey] ?? feat.quickz;
+      if (offset !== undefined) {
+        lines.push(`    geom.feature(${t}).set(${JSON.stringify(normalKey)}, ${JSON.stringify(String(offset))});`);
       }
       for (const child of feat.sketch || []) {
         const ct = JSON.stringify(child.tag);
@@ -556,6 +670,9 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
           lines.push(
             `    geom.feature(${t}).geom().feature(${ct}).set("r", ${JSON.stringify(String(child.r))});`
           );
+        }
+        if (child.base) {
+          lines.push(`    geom.feature(${t}).geom().feature(${ct}).set("base", ${JSON.stringify(child.base)});`);
         }
         if (Array.isArray(child.pos)) {
           lines.push(
@@ -585,12 +702,32 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
       if (feat.keep !== undefined) {
         lines.push(`    geom.feature(${t}).set("keep", ${Boolean(feat.keep)});`);
       }
-    } else if (feat.type === "Array") {
+    } else if (feat.type === "Revolve") {
+      lines.push(`    geom.feature(${t}).selection("input").set(${formatJavaStringArray(inputTags(feat.input))});`);
+      for (const [key, value] of Object.entries({ angle1: feat.angle1 ?? 0, angle2: feat.angle2 ?? feat.angle ?? 360, axis: feat.axis || [0, 0, 1], pos: feat.pos || [0, 0, 0] })) {
+        lines.push(`    geom.feature(${t}).set(${JSON.stringify(key)}, ${Array.isArray(value) ? formatJavaStringArray(value) : JSON.stringify(String(value))});`);
+      }
+    } else if (["Fillet", "Fillet3D", "Chamfer", "Chamfer3D"].includes(feat.type)) {
+      const entities = feat.entities || feat.edges;
+      if (!Array.isArray(entities) || !entities.length || entities.some(n => !Number.isInteger(n) || n < 1)) {
+        throw new Error(`${feat.type} '${feat.tag}' requires positive integer entities/edges`);
+      }
+      const objects = inputTags(feat.input);
+      if (!objects.length) throw new Error(`${feat.type} '${feat.tag}' requires input object tags`);
+      for (const object of objects) {
+        lines.push(`    geom.feature(${t}).selection("input").set(${JSON.stringify(object)}, new int[]{${entities.join(", ")}});`);
+      }
+      const key = feat.type.startsWith("Fillet") ? "radius" : "distance";
+      const value = feat[key] ?? feat.r;
+      if (value === undefined) throw new Error(`${feat.type} '${feat.tag}' requires ${key}`);
+      lines.push(`    geom.feature(${t}).set(${JSON.stringify(key)}, ${JSON.stringify(String(value))});`);
+    } else if (feat.type === "Array" || feat.type === "Move") {
       const inputs = Array.isArray(feat.input) ? feat.input : [feat.input];
       lines.push(`    geom.feature(${t}).selection("input").set(${formatJavaStringArray(inputs)});`);
-      if (Array.isArray(feat.size)) {
-        lines.push(`    geom.feature(${t}).set("fullsize", ${formatJavaStringArray(feat.size)});`);
+      if (feat.type === "Array" && Array.isArray(feat.size || feat.fullsize)) {
+        lines.push(`    geom.feature(${t}).set("fullsize", ${formatJavaStringArray(feat.size || feat.fullsize)});`);
       }
+      if (feat.keep !== undefined) lines.push(`    geom.feature(${t}).set("keep", ${Boolean(feat.keep)});`);
       if (Array.isArray(feat.displ)) {
         lines.push(`    geom.feature(${t}).set("displ", ${formatJavaStringArray(feat.displ)});`);
       }
@@ -618,6 +755,18 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
   for (const sel of selections) {
     const st = JSON.stringify(sel.tag);
     const entityDim = sel.entitydim ?? 2;
+    if (sel.type === "CylinderSelection") {
+      const prefix = `model.component(${JSON.stringify(compTag)}).selection(${st})`;
+      lines.push(`    model.component(${JSON.stringify(compTag)}).selection().create(${st}, "Cylinder");`);
+      lines.push(`    ${prefix}.set("entitydim", ${entityDim});`);
+      lines.push(`    ${prefix}.set("condition", ${JSON.stringify(sel.condition || "intersects")});`);
+      for (const key of ["pos", "axis", "r", "top", "bottom"]) {
+        if (sel[key] !== undefined) {
+          lines.push(`    ${prefix}.set(${JSON.stringify(key)}, ${Array.isArray(sel[key]) ? formatJavaStringArray(sel[key]) : JSON.stringify(String(sel[key]))});`);
+        }
+      }
+      continue;
+    }
     let box = sel.box;
     if (sel.type === "FaceBox") {
       const featBounds = validation.boundsByTag[sel.feature];
@@ -663,8 +812,13 @@ function compileGeometrySpecToJava(spec = {}, options = {}) {
   };
 }
 
+function stripJavaComments(source) {
+  return String(source || "").replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+    token => token.startsWith("//") || token.startsWith("/*") ? token.replace(/[^\r\n]/g, " ") : token);
+}
+
 function auditJavaGeometryCode(sourceCode) {
-  const code = String(sourceCode || "");
+  const code = stripJavaComments(sourceCode);
   const errors = [];
   const warnings = [];
 
@@ -700,6 +854,35 @@ function auditJavaGeometryCode(sourceCode) {
       errors.push(
         `Difference feature '${diffTag}' is missing '.feature("${diffTag}").selection("input2").set(new String[]{...})'`
       );
+    }
+  }
+
+
+  const blockCreates = [...code.matchAll(/([\w.()"]+)\s*\.create\(\s*"([^"]+)"\s*,\s*"Block"\s*\)/g)];
+  const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const match of blockCreates) {
+    const receiver = escapeRegex(match[1].replace(/\.feature\(\)$/, ""));
+    const tag = escapeRegex(match[2]);
+    const sizes = new RegExp(receiver + '\\s*\\.feature\\(\\s*"' + tag + '"\\s*\\)\\s*\\.set\\(\\s*"size"\\s*,\\s*([^;]+)\\)', "g");
+    for (const size of code.matchAll(sizes)) {
+      const value = size[1].trim();
+      if (/^(?:"(?:\\.|[^"\\])*"|[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?[dDfF]?)$/.test(value)) {
+        errors.push("Block '" + match[2] + "' has scalar size; use new String[]{Lx, Ly, Lz}");
+      }
+    }
+  }
+  // A feature-specific run is a partial build, not a finalization.
+  const sequences = new Set();
+  for (const m of code.matchAll(/\bGeomSequence\s+(\w+)\s*=/g)) sequences.add(m[1]);
+  if (/\bgeom\s*\.\s*(?:create|feature)\s*\(/.test(code)) sequences.add("geom");
+  for (const m of code.matchAll(/(?:model\s*\.\s*component\(\s*"[^"]+"\s*\)\s*\.)?geom\(\s*"[^"]+"\s*\)/g)) sequences.add(m[0]);
+  for (const sequence of sequences) {
+    const receiver = escapeRegex(sequence);
+    const mutations = [...code.matchAll(new RegExp(receiver + '\\s*\\.\\s*(?:create|feature)\\s*\\(', "g"))];
+    const builds = [...code.matchAll(new RegExp(receiver + '\\s*\\.\\s*run\\s*\\(\\s*(?:"fin"\\s*)?\\)', "g"))];
+    const lastMutation = mutations.length ? mutations[mutations.length - 1].index : -1;
+    if (!builds.some(m => m.index > lastMutation)) {
+      errors.push("Missing final geometry build: " + sequence + '.run("fin") or .run() required after geometry features');
     }
   }
 
@@ -843,7 +1026,7 @@ const GEOMETRY_PRESETS = {
 
 function getGeometryPreset(name) {
   const key = String(name || "").toLowerCase().trim();
-  if (!GEOMETRY_PRESETS[key]) {
+  if (!Object.prototype.hasOwnProperty.call(GEOMETRY_PRESETS, key)) {
     throw new Error(
       `Unknown geometry preset '${name}'. Available: ${Object.keys(GEOMETRY_PRESETS).join(", ")}`
     );
@@ -859,6 +1042,7 @@ function listGeometryPresets() {
 }
 
 module.exports = {
+  stripJavaComments,
   parseLengthMeters,
   computeFeatureAABB,
   analyzeBoxInteraction,

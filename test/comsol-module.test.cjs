@@ -244,3 +244,116 @@ test("5. COMSOL 6.2 Precision Geometry Engine: AABB validation, boolean overlap 
   assert.ok(audit.errors.some(e => e.includes('selection("input2")')));
 });
 
+
+
+test("6. WorkPlane and signed extrusion bounds follow orientation and offset", () => {
+  const rect = { tag: "r", type: "Rectangle", size: [2, 4], pos: [1, 2] };
+  for (const [plane, expected] of Object.entries({
+    xy: { xmin: 1, xmax: 3, ymin: 2, ymax: 6, zmin: 4, zmax: 9 },
+    yz: { xmin: 4, xmax: 9, ymin: 1, ymax: 3, zmin: 2, zmax: 6 },
+    zx: { xmin: 2, xmax: 6, ymin: 4, ymax: 9, zmin: 1, zmax: 3 }
+  })) {
+    const wp = comsol.computeFeatureAABB({ type: "WorkPlane", quickplane: plane, quickz: 7, sketch: [rect] });
+    const extruded = comsol.computeFeatureAABB({ type: "Extrude", input: ["wp"], distance: [-3, 2] }, {}, { wp });
+    assert.deepEqual(extruded, expected);
+  }
+  const wp = comsol.computeFeatureAABB({ type: "WorkPlane", sketch: [{ type: "Circle", r: 2 }] });
+  assert.deepEqual(comsol.computeFeatureAABB({ type: "Extrude", input: "wp", distance: 3 }, {}, { wp }),
+    { xmin: -2, xmax: 2, ymin: -2, ymax: 2, zmin: 0, zmax: 3 });
+  assert.equal(comsol.computeFeatureAABB({ type: "WorkPlane", sketch: [rect, { type: "Ellipse" }] }), null);
+  assert.equal(comsol.computeFeatureAABB({ type: "Extrude", input: ["wp", "unknown"], distance: 1 }, {}, { wp }), null);
+  assert.equal(comsol.computeFeatureAABB({ type: "WorkPlane", quickplane: "bad", sketch: [rect] }), null);
+});
+
+test("7. Array, Move and Revolve include negative displacements and angular extrema", () => {
+  const b = { xmin: 1, xmax: 2, ymin: 0, ymax: 1, zmin: 0, zmax: 3 };
+  assert.deepEqual(comsol.computeFeatureAABB({ type: "Array", input: ["b"], size: [3, 2, 1], displ: [-2, 4, 7] }, {}, { b }),
+    { xmin: -3, xmax: 2, ymin: 0, ymax: 5, zmin: 0, zmax: 3 });
+  assert.deepEqual(comsol.computeFeatureAABB({ type: "Move", input: ["b"], displ: [-2, 4, -1] }, {}, { b }),
+    { xmin: -1, xmax: 0, ymin: 4, ymax: 5, zmin: -1, zmax: 2 });
+  for (const size of [[0, 1, 1], [-2, 1, 1], [1.5, 1, 1]]) {
+    assert.equal(comsol.computeFeatureAABB({ type: "Array", input: "b", size }, {}, { b }), null);
+  }
+  for (const type of ["Union", "Difference", "Move", "Array", "Revolve"]) {
+    assert.equal(comsol.computeFeatureAABB({ type, input: ["b", "missing"] }, {}, { b }), null);
+  }
+  const full = comsol.computeFeatureAABB({ type: "Revolve", input: "b", angle: 360 }, {}, { b });
+  assert.ok(Math.abs(full.xmax - Math.sqrt(5)) < 1e-12);
+  assert.ok(Math.abs(full.ymin + Math.sqrt(5)) < 1e-12);
+  const partial = comsol.computeFeatureAABB({ type: "Revolve", input: "b", angle: 180 }, {}, { b });
+  assert.ok(Math.abs(partial.ymax - Math.sqrt(5)) < 1e-12);
+  assert.equal(partial.zmax, 3);
+  const invalid = comsol.validateGeometrySpec({
+    features: [{ tag: "wp", type: "WorkPlane", sketch: [{ type: "Ellipse" }] },
+      { tag: "ex", type: "Extrude", input: ["wp"], distance: 2 }],
+    selections: [{ tag: "face", type: "FaceBox", feature: "ex", face: "top" }]
+  });
+  assert.equal(invalid.valid, false);
+});
+
+test("8. Java generation uses rotation, edge-operation and component Cylinder properties", () => {
+  const compiled = comsol.compileGeometrySpecToJava({
+    features: [
+      { tag: "wp", type: "WorkPlane", quickplane: "yz", quickz: 3, sketch: [{ tag: "r", type: "Rectangle", size: [2, 4] }] },
+      { tag: "rev", type: "Revolve", input: ["wp"], angle: 270, axis: [0, 0, 1], pos: [0, 0, 0] },
+      { tag: "fil", type: "Fillet", input: ["rev"], edges: [1, 2], radius: "1[mm]" },
+      { tag: "ch", type: "Chamfer3D", input: ["fil"], entities: [3], distance: "2[mm]" },
+      { tag: "mv", type: "Move", input: ["ch"], displ: [-1, 0, 0] }
+    ],
+    selections: [{ tag: "csel", type: "CylinderSelection", pos: [1, 2, 3], axis: [0, 0, 1], r: 4, bottom: -1, top: 5 }]
+  });
+  assert.equal(compiled.status, "COMPILED_GEOMETRY_JAVA");
+  for (const expected of [
+    'geom.feature("wp").set("quickx", "3")',
+    'geom.create("fil", "Fillet3D")',
+    'geom.feature("rev").set("angle2", "270")',
+    'geom.feature("rev").set("axis", new String[]{"0", "0", "1"})',
+    'geom.feature("fil").selection("input").set("rev", new int[]{1, 2})',
+    'geom.feature("fil").set("radius", "1[mm]")',
+    'geom.feature("ch").set("distance", "2[mm]")',
+    '.selection().create("csel", "Cylinder")',
+    '.selection("csel").set("pos", new String[]{"1", "2", "3"})',
+    '.selection("csel").set("bottom", "-1")',
+    '.selection("csel").set("top", "5")',
+    'geom.feature("mv").set("displ", new String[]{"-1", "0", "0"})'
+  ]) assert.ok(compiled.javaCode.includes(expected), expected);
+  assert.equal(comsol.auditJavaGeometryCode(compiled.javaCode).valid, true);
+  assert.deepEqual(comsol.auditJavaGeometryCode(compiled.javaCode).warnings, []);
+});
+
+test("9. Java audit ignores comments and requires final builds and vector Block size", t => {
+  const head = 'GeomSequence geom = model.component("comp1").geom().create("geom1", 3); geom.create("blk", "Block");';
+  for (const scalar of ['"L"', '2', '2.5']) {
+    assert.ok(comsol.auditJavaGeometryCode(head + 'geom.feature("blk").set("size", ' + scalar + '); geom.run();').errors.some(e => e.includes("scalar size")));
+  }
+  for (const suffix of ['', '// geom.run("fin");', '/* geom.run(); */', 'geom.run("blk");']) {
+    assert.ok(comsol.auditJavaGeometryCode(head + suffix).errors.some(e => e.includes("Missing final geometry build")));
+  }
+  const valid = head + 'geom.feature("blk").set("size", new String[]{"1", "2", "3"}); geom.run("fin");';
+  assert.equal(comsol.auditJavaGeometryCode(valid).valid, true);
+  assert.equal(comsol.auditJavaGeometryCode(valid + '/* geom.create("r", "Rectangle"); */').valid, true);
+  assert.equal(comsol.auditJavaGeometryCode('geom.run();' + head).valid, false);
+  assert.equal(comsol.auditJavaGeometryCode('String url = "https://example.test";').valid, true);
+  for (const domain of ["heat-transfer", "fluid-flow", "solid-mechanics"]) {
+    assert.equal(comsol.validateJavaModelSource(comsol.getTemplate(domain).code).valid, true);
+  }
+  assert.throws(() => comsol.getTemplate("constructor"), /Unknown COMSOL template/);
+  assert.throws(() => comsol.getGeometryPreset("toString"), /Unknown geometry preset/);
+  const root = makeTempDir();
+  t.after(() => cleanupDir(root));
+  const file = path.join(root, "BadSize.java");
+  fs.writeFileSync(file, 'import com.comsol.model.*; import com.comsol.model.util.*; public class BadSize { void build() { Model model = ModelUtil.create("Model"); ' +
+    head + 'geom.feature("blk").set("size", "1"); geom.run(); }}');
+  assert.equal(comsol.compileComsolJava({ sourceFile: file, comsolRoot: path.join(root, "absent") }).status, "COMPILE_ERROR");
+});
+
+test("10. Geometry CLI rejects missing, bare and conflicting input options", () => {
+  for (const command of ["validate-geometry", "build-geometry"]) {
+    for (const args of [[], ["--spec"], ["--preset"], ["--input"], ["--spec", "x.json", "--preset", "core-shell-cylinder"]]) {
+      const res = spawnSync(process.execPath, [COMSOL_SCRIPT, command, ...args], { encoding: "utf8" });
+      assert.equal(res.status, 1);
+      assert.match(res.stderr, /requires --spec|Choose either/);
+      assert.doesNotMatch(res.stderr, /TypeError|ERR_INVALID_ARG_TYPE/);
+    }
+  }
+});
